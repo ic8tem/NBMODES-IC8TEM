@@ -1,0 +1,873 @@
+name: Publish Linux CI Images
+
+on:
+  workflow_call:
+    inputs:
+      publication_target:
+        description: "Image destination: internal or public-release"
+        required: false
+        type: string
+        default: "internal"
+      mode:
+        description: "Refresh or rollback"
+        required: false
+        type: string
+        default: "refresh"
+      promote:
+        description: "Promote candidates after every validation succeeds"
+        required: false
+        type: boolean
+        default: true
+      rollback_tag:
+        description: "Retained validated-build-* tag to promote when mode is rollback"
+        required: false
+        type: string
+        default: ""
+      include_armhf:
+        description: "Build and validate both ARMHF distro image pairs"
+        required: false
+        type: boolean
+        default: false
+      image_set:
+        description: "Image cohort: normal or tsan"
+        required: false
+        type: string
+        default: "normal"
+      candidate_profile:
+        description: "Candidate profile: all, x86_64, aarch64, armhf-bookworm, or armhf-trixie"
+        required: false
+        type: string
+        default: "all"
+    outputs:
+      image_tag:
+        description: "Immutable tag shared by the published image cohort"
+        value: ${{ jobs.metadata.outputs.build_tag }}
+      x86_64_digest:
+        description: "Digest of the linux-noble release image"
+        value: ${{ jobs.build-normal.outputs.digest }}
+      aarch64_digest:
+        description: "Digest of the linux-arm64-bookworm release image"
+        value: ${{ jobs.build-arm64.outputs.digest }}
+      armhf_digest:
+        description: "Digest of the linux-armv7-bookworm release image"
+        value: ${{ jobs.build-armhf-runtime.outputs.digest }}
+      armhf_cross_digest:
+        description: "Digest of the linux-armhf-cross-bookworm release image"
+        value: ${{ jobs.build-armhf-cross.outputs.digest }}
+      armhf_trixie_digest:
+        description: "Digest of the linux-armv7-trixie release image"
+        value: ${{ jobs.build-armhf-trixie-runtime.outputs.digest }}
+      armhf_trixie_cross_digest:
+        description: "Digest of the linux-armhf-cross-trixie release image"
+        value: ${{ jobs.build-armhf-trixie-cross.outputs.digest }}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build a new generation or roll stable back to a retained tag"
+        required: true
+        type: choice
+        options:
+          - refresh
+          - rollback
+        default: refresh
+      promote:
+        description: "Promote candidates after every validation succeeds"
+        required: false
+        type: boolean
+        default: true
+      rollback_tag:
+        description: "Retained validated-build-* tag to promote when mode is rollback"
+        required: false
+        type: string
+        default: ""
+      include_armhf:
+        description: "Build and validate both ARMHF distro image pairs"
+        required: false
+        type: boolean
+        default: false
+      image_set:
+        description: "Images to publish or roll back"
+        required: true
+        type: choice
+        options:
+          - normal
+          - tsan
+        default: normal
+      publication_target:
+        description: "Image destination"
+        required: true
+        type: choice
+        options:
+          - internal
+          - public-release
+        default: internal
+      candidate_profile:
+        description: "Select one internal candidate profile, or all for a complete cohort"
+        required: false
+        type: choice
+        options:
+          - all
+          - x86_64
+          - aarch64
+          - armhf-bookworm
+          - armhf-trixie
+        default: all
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: linux-ci-image-publishing-${{ inputs.image_set }}
+  cancel-in-progress: false
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Validate publication request
+        env:
+          MODE: ${{ inputs.mode }}
+          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
+          IMAGE_SET: ${{ inputs.image_set }}
+          INCLUDE_ARMHF: ${{ inputs.include_armhf }}
+          CANDIDATE_PROFILE: ${{ inputs.candidate_profile }}
+          PROMOTE: ${{ inputs.promote }}
+          REQUEST_REF: ${{ github.ref }}
+          REQUEST_REPOSITORY: ${{ github.repository }}
+          PUBLICATION_TARGET: ${{ inputs.publication_target }}
+        shell: bash
+        run: |
+          case "$MODE" in
+            refresh)
+              if [ -n "$ROLLBACK_TAG" ]; then
+                echo "::error::rollback_tag must be empty in refresh mode"
+                exit 2
+              fi
+              ;;
+            rollback)
+              if [[ ! "$ROLLBACK_TAG" =~ ^validated-build-[0-9]{8}-[0-9]+-[0-9]+$ ]]; then
+                echo "::error::rollback_tag must identify a validated retained generation"
+                exit 2
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported publication mode: $MODE"
+              exit 2
+              ;;
+          esac
+
+          case "$IMAGE_SET" in
+            normal|tsan) ;;
+            normal-and-tsan)
+              echo "::error::Publish normal and TSan cohorts separately; image_set=normal-and-tsan is no longer supported"
+              exit 2
+              ;;
+            *)
+              echo "::error::Unsupported image_set: $IMAGE_SET"
+              exit 2
+              ;;
+          esac
+
+          case "$CANDIDATE_PROFILE" in
+            all|x86_64|aarch64|armhf-bookworm|armhf-trixie) ;;
+            *)
+              echo "::error::Unsupported candidate_profile: $CANDIDATE_PROFILE"
+              exit 2
+              ;;
+          esac
+
+          if [ "$CANDIDATE_PROFILE" != all ]; then
+            if [ "$MODE" != refresh ] || [ "$PROMOTE" != false ] || \
+               [ "$IMAGE_SET" != normal ] || [ "$INCLUDE_ARMHF" != false ] || \
+               [ "$PUBLICATION_TARGET" != internal ]; then
+              echo "::error::Single-profile candidates require internal refresh, promote=false, image_set=normal, and include_armhf=false"
+              exit 2
+            fi
+          fi
+
+          case "$PUBLICATION_TARGET" in
+            internal) ;;
+            public-release)
+              if [ "$REQUEST_REPOSITORY" != WSJTX/wsjtx ]; then
+                echo "::error::Public release images may only be published by WSJTX/wsjtx"
+                exit 2
+              fi
+              if [[ ! "$REQUEST_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[1-9][0-9]*)?$ ]]; then
+                echo "::error::Public release images require an exact vX.Y.Z, vX.Y.Z-betaN, or vX.Y.Z-rcN tag"
+                exit 2
+              fi
+              if [ "$MODE" != refresh ] || [ "$PROMOTE" != false ] || \
+                 [ "$IMAGE_SET" != normal ] || [ "$INCLUDE_ARMHF" != true ]; then
+                echo "::error::Public release images require refresh, promote=false, image_set=normal, and include_armhf=true"
+                exit 2
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported publication_target: $PUBLICATION_TARGET"
+              exit 2
+              ;;
+          esac
+
+          if [ "$IMAGE_SET" = tsan ] && [ "$INCLUDE_ARMHF" = true ]; then
+            echo "::error::include_armhf is valid only when normal images are selected"
+            exit 2
+          fi
+
+          if { [ "$MODE" = rollback ] || [ "$PROMOTE" = true ]; } && \
+            [ "$REQUEST_REF" != refs/heads/develop ]; then
+            echo "::error::Promotion and rollback must run from refs/heads/develop"
+            exit 2
+          fi
+
+  metadata:
+    if: inputs.mode != 'rollback'
+    needs: validate-inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      build_tag: ${{ steps.metadata.outputs.build_tag }}
+      candidate_tag: ${{ steps.metadata.outputs.candidate_tag }}
+      created: ${{ steps.metadata.outputs.created }}
+      version: ${{ steps.metadata.outputs.version }}
+      normal_hamlib_ref: ${{ steps.metadata.outputs.normal_hamlib_ref }}
+      tsan_hamlib_ref: ${{ steps.metadata.outputs.tsan_hamlib_ref }}
+      normal_noble_recipe: ${{ steps.metadata.outputs.normal_noble_recipe }}
+      normal_bookworm_recipe: ${{ steps.metadata.outputs.normal_bookworm_recipe }}
+      armhf_cross_recipe: ${{ steps.metadata.outputs.armhf_cross_recipe }}
+      armhf_runtime_recipe: ${{ steps.metadata.outputs.armhf_runtime_recipe }}
+      tsan_noble_recipe: ${{ steps.metadata.outputs.tsan_noble_recipe }}
+      refresh_epoch: ${{ steps.metadata.outputs.refresh_epoch }}
+      package_root: ${{ steps.metadata.outputs.package_root }}
+      normal_cache_from: ${{ steps.metadata.outputs.normal_cache_from }}
+      arm64_cache_from: ${{ steps.metadata.outputs.arm64_cache_from }}
+      armhf_cross_cache_from: ${{ steps.metadata.outputs.armhf_cross_cache_from }}
+      armhf_cache_from: ${{ steps.metadata.outputs.armhf_cache_from }}
+      armhf_trixie_cross_recipe: ${{ steps.metadata.outputs.armhf_trixie_cross_recipe }}
+      armhf_trixie_runtime_recipe: ${{ steps.metadata.outputs.armhf_trixie_runtime_recipe }}
+      armhf_trixie_cross_cache_from: ${{ steps.metadata.outputs.armhf_trixie_cross_cache_from }}
+      armhf_trixie_cache_from: ${{ steps.metadata.outputs.armhf_trixie_cache_from }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: metadata
+        env:
+          IMAGE_SET: ${{ inputs.image_set }}
+          PUBLICATION_TARGET: ${{ inputs.publication_target }}
+        shell: bash
+        run: |
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          date_tag="$(date -u +%Y%m%d)"
+          version="$(awk -F= '$1 == "version" {print $2; exit}' release-state.txt)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not derive a numeric version from release-state.txt"
+            exit 1
+          fi
+          {
+            if [ "$PUBLICATION_TARGET" = public-release ]; then
+              release_tag="release-${GITHUB_REF_NAME}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "build_tag=$release_tag"
+              echo "candidate_tag=candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "package_root=ghcr.io/wsjtx/wsjtx"
+              echo "normal_cache_from=type=gha,scope=public-release-linux-noble"
+              echo "arm64_cache_from=type=gha,scope=public-release-linux-arm64-bookworm"
+              echo "armhf_cross_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx/linux-armhf-cross-bookworm:buildcache"
+              echo "armhf_trixie_cross_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx/linux-armhf-cross-trixie:buildcache"
+              echo "armhf_trixie_cache_from=type=gha,scope=public-release-linux-armv7-trixie"
+              echo "armhf_cache_from=type=gha,scope=public-release-linux-armv7-bookworm"
+            else
+              echo "build_tag=build-${date_tag}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "candidate_tag=candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              echo "package_root=ghcr.io/wsjtx/wsjtx-internal"
+              echo "normal_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx-internal/linux-noble:stable"
+              echo "arm64_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx-internal/linux-arm64-bookworm:stable"
+              echo "armhf_cross_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-bookworm:buildcache"
+              echo "armhf_trixie_cross_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-trixie:buildcache"
+              echo "armhf_trixie_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx-internal/linux-armv7-trixie:stable"
+              echo "armhf_cache_from=type=registry,ref=ghcr.io/wsjtx/wsjtx-internal/linux-armv7-bookworm:stable"
+            fi
+            echo "created=$created"
+            echo "version=$version"
+            echo "refresh_epoch=$(date -u +%Y-%m)"
+            if [ "$IMAGE_SET" != tsan ]; then
+              . .github/scripts/linux-ci-image-config.sh
+              echo "normal_hamlib_ref=$LINUX_HAMLIB_REF"
+              echo "normal_noble_recipe=$(.github/scripts/linux-ci-image-fingerprint.sh normal-noble)"
+              echo "normal_bookworm_recipe=$(.github/scripts/linux-ci-image-fingerprint.sh normal-bookworm)"
+              echo "armhf_cross_recipe=$(.github/scripts/linux-ci-image-fingerprint.sh armhf-cross-bookworm)"
+              echo "armhf_runtime_recipe=$(.github/scripts/linux-ci-image-fingerprint.sh armhf-runtime-bookworm)"
+              echo "armhf_trixie_cross_recipe=$(.github/scripts/linux-ci-image-fingerprint.sh armhf-cross-trixie)"
+              echo "armhf_trixie_runtime_recipe=$(.github/scripts/linux-ci-image-fingerprint.sh armhf-runtime-trixie)"
+            fi
+            if [ "$IMAGE_SET" != normal ]; then
+              . .github/scripts/tsan-linux-deps-config.sh
+              echo "tsan_hamlib_ref=$TSAN_HAMLIB_REF"
+              echo "tsan_noble_recipe=$(.github/scripts/linux-ci-image-fingerprint.sh tsan-noble)"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+  build-normal:
+    if: >-
+      (inputs.candidate_profile == 'all' || inputs.candidate_profile == 'x86_64') &&
+      inputs.image_set == 'normal'
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/images/linux-ci/Dockerfile.noble
+          target: normal
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          labels: ${{ inputs.publication_target == 'public-release' && 'org.opencontainers.image.source=https://github.com/WSJTX/wsjtx' || '' }}
+          tags: |
+            ${{ needs.metadata.outputs.package_root }}/linux-noble:${{ needs.metadata.outputs.candidate_tag }}
+            ${{ needs.metadata.outputs.package_root }}/linux-noble:${{ needs.metadata.outputs.build_tag }}
+          build-args: |
+            IMAGE_CREATED=${{ needs.metadata.outputs.created }}
+            IMAGE_GENERATION=${{ needs.metadata.outputs.build_tag }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_RECIPE_SHA256=${{ needs.metadata.outputs.normal_noble_recipe }}
+            IMAGE_REFRESH_EPOCH=${{ needs.metadata.outputs.refresh_epoch }}
+          cache-from: ${{ needs.metadata.outputs.normal_cache_from }}
+          cache-to: type=inline
+
+  build-tsan:
+    if: inputs.image_set == 'tsan'
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/images/linux-ci/Dockerfile.noble
+          target: tsan
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          labels: ${{ inputs.publication_target == 'public-release' && 'org.opencontainers.image.source=https://github.com/WSJTX/wsjtx' || '' }}
+          tags: |
+            ghcr.io/wsjtx/wsjtx-internal/linux-tsan-noble:${{ needs.metadata.outputs.candidate_tag }}
+            ghcr.io/wsjtx/wsjtx-internal/linux-tsan-noble:${{ needs.metadata.outputs.build_tag }}
+          build-args: |
+            IMAGE_CREATED=${{ needs.metadata.outputs.created }}
+            IMAGE_GENERATION=${{ needs.metadata.outputs.build_tag }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_RECIPE_SHA256=${{ needs.metadata.outputs.tsan_noble_recipe }}
+            IMAGE_REFRESH_EPOCH=${{ needs.metadata.outputs.refresh_epoch }}
+          cache-from: type=registry,ref=ghcr.io/wsjtx/wsjtx-internal/linux-tsan-noble:stable
+          cache-to: type=inline
+
+  build-arm64:
+    if: >-
+      (inputs.candidate_profile == 'all' || inputs.candidate_profile == 'aarch64') &&
+      inputs.image_set == 'normal'
+    needs: metadata
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/images/linux-ci/Dockerfile.bookworm
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          labels: ${{ inputs.publication_target == 'public-release' && 'org.opencontainers.image.source=https://github.com/WSJTX/wsjtx' || '' }}
+          tags: |
+            ${{ needs.metadata.outputs.package_root }}/linux-arm64-bookworm:${{ needs.metadata.outputs.candidate_tag }}
+            ${{ needs.metadata.outputs.package_root }}/linux-arm64-bookworm:${{ needs.metadata.outputs.build_tag }}
+          build-args: |
+            IMAGE_ARCH=aarch64
+            IMAGE_CREATED=${{ needs.metadata.outputs.created }}
+            IMAGE_GENERATION=${{ needs.metadata.outputs.build_tag }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_RECIPE_SHA256=${{ needs.metadata.outputs.normal_bookworm_recipe }}
+            IMAGE_REFRESH_EPOCH=${{ needs.metadata.outputs.refresh_epoch }}
+          cache-from: ${{ needs.metadata.outputs.arm64_cache_from }}
+          cache-to: type=inline
+
+  build-armhf-cross:
+    if: >-
+      ((inputs.candidate_profile == 'all' && inputs.include_armhf) || inputs.candidate_profile == 'armhf-bookworm') &&
+      inputs.image_set == 'normal'
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+        with:
+          image: tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/images/linux-ci/Dockerfile.armhf-cross
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          labels: ${{ inputs.publication_target == 'public-release' && 'org.opencontainers.image.source=https://github.com/WSJTX/wsjtx' || '' }}
+          tags: |
+            ${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-bookworm:${{ needs.metadata.outputs.candidate_tag }}
+            ${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-bookworm:${{ needs.metadata.outputs.build_tag }}
+          build-args: |
+            IMAGE_CREATED=${{ needs.metadata.outputs.created }}
+            IMAGE_GENERATION=${{ needs.metadata.outputs.build_tag }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_RECIPE_SHA256=${{ needs.metadata.outputs.armhf_cross_recipe }}
+            IMAGE_REFRESH_EPOCH=${{ needs.metadata.outputs.refresh_epoch }}
+          cache-from: ${{ needs.metadata.outputs.armhf_cross_cache_from }}
+          cache-to: type=registry,ref=${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-bookworm:buildcache,mode=max,oci-mediatypes=true,image-manifest=true
+
+  build-armhf-runtime:
+    if: >-
+      ((inputs.candidate_profile == 'all' && inputs.include_armhf) || inputs.candidate_profile == 'armhf-bookworm') &&
+      inputs.image_set == 'normal'
+    needs:
+      - metadata
+      - build-armhf-cross
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+        with:
+          image: tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: linux/arm/v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/images/linux-ci/Dockerfile.armhf-runtime
+          platforms: linux/arm/v7
+          push: true
+          provenance: false
+          sbom: false
+          labels: ${{ inputs.publication_target == 'public-release' && 'org.opencontainers.image.source=https://github.com/WSJTX/wsjtx' || '' }}
+          tags: |
+            ${{ needs.metadata.outputs.package_root }}/linux-armv7-bookworm:${{ needs.metadata.outputs.candidate_tag }}
+            ${{ needs.metadata.outputs.package_root }}/linux-armv7-bookworm:${{ needs.metadata.outputs.build_tag }}
+          build-args: |
+            CROSS_BUILDER_IMAGE=${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-bookworm:${{ needs.metadata.outputs.build_tag }}
+            IMAGE_CREATED=${{ needs.metadata.outputs.created }}
+            IMAGE_GENERATION=${{ needs.metadata.outputs.build_tag }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_RECIPE_SHA256=${{ needs.metadata.outputs.armhf_runtime_recipe }}
+            IMAGE_REFRESH_EPOCH=${{ needs.metadata.outputs.refresh_epoch }}
+          cache-from: ${{ needs.metadata.outputs.armhf_cache_from }}
+          cache-to: type=inline
+
+  build-armhf-trixie-cross:
+    if: >-
+      ((inputs.candidate_profile == 'all' && inputs.include_armhf) || inputs.candidate_profile == 'armhf-trixie') &&
+      inputs.image_set == 'normal'
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+        with:
+          image: tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/images/linux-ci/Dockerfile.armhf-cross-trixie
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          labels: ${{ inputs.publication_target == 'public-release' && 'org.opencontainers.image.source=https://github.com/WSJTX/wsjtx' || '' }}
+          tags: |
+            ${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-trixie:${{ needs.metadata.outputs.candidate_tag }}
+            ${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-trixie:${{ needs.metadata.outputs.build_tag }}
+          build-args: |
+            ARMHF_DISTRO=trixie
+            IMAGE_CREATED=${{ needs.metadata.outputs.created }}
+            IMAGE_GENERATION=${{ needs.metadata.outputs.build_tag }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_RECIPE_SHA256=${{ needs.metadata.outputs.armhf_trixie_cross_recipe }}
+            IMAGE_REFRESH_EPOCH=${{ needs.metadata.outputs.refresh_epoch }}
+          cache-from: ${{ needs.metadata.outputs.armhf_trixie_cross_cache_from }}
+          cache-to: type=registry,ref=${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-trixie:buildcache,mode=max,oci-mediatypes=true,image-manifest=true
+
+  build-armhf-trixie-runtime:
+    if: >-
+      ((inputs.candidate_profile == 'all' && inputs.include_armhf) || inputs.candidate_profile == 'armhf-trixie') &&
+      inputs.image_set == 'normal'
+    needs:
+      - metadata
+      - build-armhf-trixie-cross
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+        with:
+          image: tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: linux/arm/v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/images/linux-ci/Dockerfile.armhf-runtime
+          platforms: linux/arm/v7
+          push: true
+          provenance: false
+          sbom: false
+          labels: ${{ inputs.publication_target == 'public-release' && 'org.opencontainers.image.source=https://github.com/WSJTX/wsjtx' || '' }}
+          tags: |
+            ${{ needs.metadata.outputs.package_root }}/linux-armv7-trixie:${{ needs.metadata.outputs.candidate_tag }}
+            ${{ needs.metadata.outputs.package_root }}/linux-armv7-trixie:${{ needs.metadata.outputs.build_tag }}
+          build-args: |
+            ARMHF_DISTRO=trixie
+            CROSS_BUILDER_IMAGE=${{ needs.metadata.outputs.package_root }}/linux-armhf-cross-trixie:${{ needs.metadata.outputs.build_tag }}
+            IMAGE_CREATED=${{ needs.metadata.outputs.created }}
+            IMAGE_GENERATION=${{ needs.metadata.outputs.build_tag }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_RECIPE_SHA256=${{ needs.metadata.outputs.armhf_trixie_runtime_recipe }}
+            IMAGE_REFRESH_EPOCH=${{ needs.metadata.outputs.refresh_epoch }}
+          cache-from: ${{ needs.metadata.outputs.armhf_trixie_cache_from }}
+          cache-to: type=inline
+
+  warm-normal-ccache:
+    if: >-
+      inputs.promote &&
+      inputs.image_set == 'normal'
+    needs:
+      - metadata
+      - build-normal
+    uses: ./.github/workflows/build-linux.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      version: ${{ needs.metadata.outputs.version }}
+      hamlib_branch: ${{ needs.metadata.outputs.normal_hamlib_ref }}
+      arch: x86_64
+      image_tag: ${{ needs.metadata.outputs.build_tag }}
+      allow_stale_image: false
+      recache: false
+      save_ccache: true
+
+  warm-arm64-ccache:
+    if: >-
+      inputs.promote &&
+      inputs.image_set == 'normal'
+    needs:
+      - metadata
+      - build-arm64
+    uses: ./.github/workflows/build-linux.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      version: ${{ needs.metadata.outputs.version }}
+      hamlib_branch: ${{ needs.metadata.outputs.normal_hamlib_ref }}
+      arch: aarch64
+      image_tag: ${{ needs.metadata.outputs.build_tag }}
+      allow_stale_image: false
+      recache: false
+      save_ccache: true
+
+  promote:
+    if: >-
+      always() && inputs.mode == 'refresh' && inputs.promote &&
+      (inputs.image_set == 'tsan' ||
+       (needs.build-normal.result == 'success' &&
+        needs.build-arm64.result == 'success' &&
+        needs.warm-normal-ccache.result == 'success' &&
+        needs.warm-arm64-ccache.result == 'success' &&
+        (inputs.include_armhf == false ||
+         (needs.build-armhf-cross.result == 'success' && needs.build-armhf-runtime.result == 'success' &&
+          needs.build-armhf-trixie-cross.result == 'success' && needs.build-armhf-trixie-runtime.result == 'success')))) &&
+      (inputs.image_set == 'normal' || needs.build-tsan.result == 'success')
+    needs:
+      - metadata
+      - build-normal
+      - build-tsan
+      - build-arm64
+      - build-armhf-cross
+      - build-armhf-runtime
+      - build-armhf-trixie-cross
+      - build-armhf-trixie-runtime
+      - warm-normal-ccache
+      - warm-arm64-ccache
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote validated image digests
+        env:
+          VALIDATED_TAG: validated-${{ needs.metadata.outputs.build_tag }}
+          INCLUDE_ARMHF: ${{ inputs.include_armhf }}
+          IMAGE_SET: ${{ inputs.image_set }}
+        shell: bash
+        run: |
+          references=()
+          if [ "$IMAGE_SET" != tsan ]; then
+            references+=(
+              "linux-noble@${{ needs.build-normal.outputs.digest }}"
+              "linux-arm64-bookworm@${{ needs.build-arm64.outputs.digest }}"
+            )
+            if [ "$INCLUDE_ARMHF" = true ]; then
+              references+=(
+                "linux-armhf-cross-bookworm@${{ needs.build-armhf-cross.outputs.digest }}"
+                "linux-armv7-bookworm@${{ needs.build-armhf-runtime.outputs.digest }}"
+                "linux-armhf-cross-trixie@${{ needs.build-armhf-trixie-cross.outputs.digest }}"
+                "linux-armv7-trixie@${{ needs.build-armhf-trixie-runtime.outputs.digest }}"
+              )
+            fi
+          fi
+          if [ "$IMAGE_SET" != normal ]; then
+            references+=("linux-tsan-noble@${{ needs.build-tsan.outputs.digest }}")
+          fi
+          for reference in "${references[@]}"; do
+            [[ "$reference" =~ @sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect "ghcr.io/wsjtx/wsjtx-internal/${reference}" >/dev/null
+          done
+
+          if [ "$IMAGE_SET" != tsan ]; then
+            docker buildx imagetools create --prefer-index=false \
+              --tag "ghcr.io/wsjtx/wsjtx-internal/linux-noble:${VALIDATED_TAG}" \
+              ghcr.io/wsjtx/wsjtx-internal/linux-noble@${{ needs.build-normal.outputs.digest }}
+            docker buildx imagetools create --prefer-index=false \
+              --tag "ghcr.io/wsjtx/wsjtx-internal/linux-arm64-bookworm:${VALIDATED_TAG}" \
+              ghcr.io/wsjtx/wsjtx-internal/linux-arm64-bookworm@${{ needs.build-arm64.outputs.digest }}
+            if [ "$INCLUDE_ARMHF" = true ]; then
+              docker buildx imagetools create --prefer-index=false \
+                --tag "ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-trixie:${VALIDATED_TAG}" \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-trixie@${{ needs.build-armhf-trixie-cross.outputs.digest }}
+              docker buildx imagetools create --prefer-index=false \
+                --tag "ghcr.io/wsjtx/wsjtx-internal/linux-armv7-trixie:${VALIDATED_TAG}" \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armv7-trixie@${{ needs.build-armhf-trixie-runtime.outputs.digest }}
+              docker buildx imagetools create --prefer-index=false \
+                --tag "ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-bookworm:${VALIDATED_TAG}" \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-bookworm@${{ needs.build-armhf-cross.outputs.digest }}
+              docker buildx imagetools create --prefer-index=false \
+                --tag "ghcr.io/wsjtx/wsjtx-internal/linux-armv7-bookworm:${VALIDATED_TAG}" \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armv7-bookworm@${{ needs.build-armhf-runtime.outputs.digest }}
+            fi
+          fi
+          if [ "$IMAGE_SET" != normal ]; then
+            docker buildx imagetools create --prefer-index=false \
+              --tag "ghcr.io/wsjtx/wsjtx-internal/linux-tsan-noble:${VALIDATED_TAG}" \
+              ghcr.io/wsjtx/wsjtx-internal/linux-tsan-noble@${{ needs.build-tsan.outputs.digest }}
+          fi
+
+          if [ "$IMAGE_SET" != normal ]; then
+            docker buildx imagetools create --prefer-index=false \
+              --tag ghcr.io/wsjtx/wsjtx-internal/linux-tsan-noble:stable \
+              ghcr.io/wsjtx/wsjtx-internal/linux-tsan-noble@${{ needs.build-tsan.outputs.digest }}
+          fi
+          if [ "$IMAGE_SET" != tsan ]; then
+            docker buildx imagetools create --prefer-index=false \
+              --tag ghcr.io/wsjtx/wsjtx-internal/linux-arm64-bookworm:stable \
+              ghcr.io/wsjtx/wsjtx-internal/linux-arm64-bookworm@${{ needs.build-arm64.outputs.digest }}
+            if [ "$INCLUDE_ARMHF" = true ]; then
+              docker buildx imagetools create --prefer-index=false \
+                --tag ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-trixie:stable \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-trixie@${{ needs.build-armhf-trixie-cross.outputs.digest }}
+              docker buildx imagetools create --prefer-index=false \
+                --tag ghcr.io/wsjtx/wsjtx-internal/linux-armv7-trixie:stable \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armv7-trixie@${{ needs.build-armhf-trixie-runtime.outputs.digest }}
+              docker buildx imagetools create --prefer-index=false \
+                --tag ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-bookworm:stable \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armhf-cross-bookworm@${{ needs.build-armhf-cross.outputs.digest }}
+              docker buildx imagetools create --prefer-index=false \
+                --tag ghcr.io/wsjtx/wsjtx-internal/linux-armv7-bookworm:stable \
+                ghcr.io/wsjtx/wsjtx-internal/linux-armv7-bookworm@${{ needs.build-armhf-runtime.outputs.digest }}
+            fi
+            # linux-noble:stable moves last within the normal image cohort.
+            docker buildx imagetools create --prefer-index=false \
+              --tag ghcr.io/wsjtx/wsjtx-internal/linux-noble:stable \
+              ghcr.io/wsjtx/wsjtx-internal/linux-noble@${{ needs.build-normal.outputs.digest }}
+          fi
+
+  warm-asan-ubsan-ccache:
+    if: >-
+      !cancelled() && needs.promote.result == 'success' &&
+      github.ref == 'refs/heads/develop' &&
+      inputs.publication_target == 'internal' &&
+      inputs.mode == 'refresh' && inputs.promote &&
+      inputs.image_set == 'normal'
+    needs:
+      - metadata
+      - promote
+    uses: ./.github/workflows/build-linux-sanitizers.yml
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: asan-ubsan-ccache-develop
+      cancel-in-progress: false
+    with:
+      hamlib_branch: ${{ needs.metadata.outputs.normal_hamlib_ref }}
+      sanitizer: asan-ubsan
+      image_tag: ${{ needs.metadata.outputs.build_tag }}
+      run_tests: false
+      allow_stale_image: false
+      recache: false
+      save_ccache: true
+
+  warm-armhf-ccache:
+    if: >-
+      !cancelled() && needs.promote.result == 'success' &&
+      github.ref == 'refs/heads/develop' &&
+      inputs.publication_target == 'internal' &&
+      inputs.mode == 'refresh' && inputs.promote && inputs.include_armhf &&
+      inputs.image_set == 'normal'
+    needs:
+      - metadata
+      - promote
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [bookworm, trixie]
+    uses: ./.github/workflows/build-linux.yml
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: armhf-ccache-develop-${{ matrix.distro }}
+      cancel-in-progress: false
+    with:
+      version: ${{ needs.metadata.outputs.version }}
+      hamlib_branch: ${{ needs.metadata.outputs.normal_hamlib_ref }}
+      arch: armhf
+      armhf_distro: ${{ matrix.distro }}
+      image_tag: ${{ needs.metadata.outputs.build_tag }}
+      armhf_build_only: true
+      allow_stale_image: false
+      recache: false
+      save_ccache: true
+
+  rollback:
+    if: inputs.mode == 'rollback'
+    needs: validate-inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore retained generation
+        env:
+          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
+          INCLUDE_ARMHF: ${{ inputs.include_armhf }}
+          IMAGE_SET: ${{ inputs.image_set }}
+        shell: bash
+        run: |
+          packages=()
+          stable_packages=()
+          if [ "$IMAGE_SET" != tsan ]; then
+            packages+=(linux-noble linux-arm64-bookworm)
+            stable_packages+=(linux-arm64-bookworm)
+            if [ "$INCLUDE_ARMHF" = true ]; then
+              packages+=(linux-armhf-cross-bookworm linux-armv7-bookworm linux-armhf-cross-trixie linux-armv7-trixie)
+              stable_packages+=(linux-armhf-cross-trixie linux-armv7-trixie linux-armhf-cross-bookworm linux-armv7-bookworm)
+            fi
+            # linux-noble:stable moves last within the normal image cohort.
+            stable_packages+=(linux-noble)
+          fi
+          if [ "$IMAGE_SET" != normal ]; then
+            packages+=(linux-tsan-noble)
+            if [ "$IMAGE_SET" = tsan ]; then
+              stable_packages=(linux-tsan-noble)
+            else
+              stable_packages=(linux-tsan-noble "${stable_packages[@]}")
+            fi
+          fi
+
+          for package in "${packages[@]}"; do
+            docker buildx imagetools inspect \
+              "ghcr.io/wsjtx/wsjtx-internal/${package}:${ROLLBACK_TAG}" >/dev/null
+          done
+
+          for package in "${stable_packages[@]}"; do
+            docker buildx imagetools create --prefer-index=false \
+              --tag "ghcr.io/wsjtx/wsjtx-internal/${package}:stable" \
+              "ghcr.io/wsjtx/wsjtx-internal/${package}:${ROLLBACK_TAG}"
+          done

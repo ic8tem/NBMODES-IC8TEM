@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+chmod +x /usr/local/share/wsjtx-ci/*.sh
+# shellcheck source=.github/scripts/armhf-ci-image-config.sh
+. /usr/local/share/wsjtx-ci/armhf-ci-image-config.sh
+armhf_gcc_version_matches "$("$ARMHF_TOOLCHAIN_PREFIX/bin/$ARMHF_TARGET_TRIPLET-gcc" -dumpfullversion -dumpversion)"
+test "$("$ARMHF_TOOLCHAIN_PREFIX/bin/$ARMHF_TARGET_TRIPLET-gcc" -dumpmachine)" = "$ARMHF_TARGET_TRIPLET"
+package_csv="$(IFS=,; echo "${ARMHF_SYSROOT_PACKAGES[*]}")"
+mmdebstrap --variant=essential --architectures=armhf \
+  --include="$package_csv" --skip=chroot/mount \
+  "$ARMHF_DISTRO" "$ARMHF_SYSROOT" http://deb.debian.org/debian
+/usr/local/share/wsjtx-ci/normalize-armhf-sysroot-symlinks.sh "$ARMHF_SYSROOT"
+test -f "$ARMHF_SYSROOT/lib/arm-linux-gnueabihf/libc.so.6"
+test -f "$ARMHF_SYSROOT/lib/ld-linux-armhf.so.3"
+mkdir -p /opt/wsjtx-ci
+# shellcheck disable=SC2016
+dpkg-query --admindir="$ARMHF_SYSROOT/var/lib/dpkg" -W -f='${binary:Package}=${Version}\n' |
+  LC_ALL=C sort -u \
+  > /opt/wsjtx-ci/armhf-sysroot-packages.txt
+test -s /opt/wsjtx-ci/armhf-sysroot-packages.txt
+rm -rf "$ARMHF_SYSROOT/var/cache/apt/archives" "$ARMHF_SYSROOT/var/lib/apt/lists"
+export PATH="$ARMHF_TOOLCHAIN_PREFIX/bin:$PATH"
+# shellcheck source=.github/scripts/linux-boost-config.sh
+. /usr/local/share/wsjtx-ci/linux-boost-config.sh
+CXX="$ARMHF_TARGET_TRIPLET-g++" CXXFLAGS="${ARMHF_ABI_FLAGS[*]}" \
+  BOOST_SYSROOT="$ARMHF_SYSROOT" \
+  /usr/local/share/wsjtx-ci/build-boost-linux.sh "$BOOST_VERSION" "$ARMHF_SYSROOT$LINUX_BOOST_PREFIX"
+# shellcheck source=.github/scripts/linux-boost-validation.sh
+. /usr/local/share/wsjtx-ci/linux-boost-validation.sh
+READELF="$ARMHF_TOOLCHAIN_PREFIX/bin/$ARMHF_TARGET_TRIPLET-readelf" \
+  validate_linux_boost_archives "$ARMHF_SYSROOT$LINUX_BOOST_PREFIX" armhf "$BOOST_VERSION"
+fftw_cflags="--sysroot=$ARMHF_SYSROOT -isystem $ARMHF_SYSROOT/usr/include/$ARMHF_TARGET_TRIPLET ${ARMHF_ABI_FLAGS[*]} -O3"
+fftw_ldflags="--sysroot=$ARMHF_SYSROOT -B$ARMHF_SYSROOT/usr/lib/$ARMHF_TARGET_TRIPLET/ -L$ARMHF_SYSROOT/usr/lib/$ARMHF_TARGET_TRIPLET -Wl,-rpath-link,$ARMHF_SYSROOT/lib/$ARMHF_TARGET_TRIPLET"
+# Libtool preserves the Debian start-file prefix in CC, but drops it from LDFLAGS.
+fftw_cc="$ARMHF_TARGET_TRIPLET-gcc -B$ARMHF_SYSROOT/usr/lib/$ARMHF_TARGET_TRIPLET/"
+FFTW_ARCH=armhf CC="$fftw_cc" \
+  CFLAGS="$fftw_cflags" LDFLAGS="$fftw_ldflags" DESTDIR="$ARMHF_SYSROOT" \
+  /usr/local/share/wsjtx-ci/build-fftw.sh "$LINUX_FFTW_PREFIX" \
+    --build=x86_64-pc-linux-gnu --host="$ARMHF_TARGET_TRIPLET"
+mkdir -p /tmp/wsjtx-hamlib-build
+cd /tmp/wsjtx-hamlib-build
+/usr/local/share/wsjtx-ci/build-hamlib-armhf-cross.sh \
+  "$LINUX_HAMLIB_COMMIT" "$ARMHF_SYSROOT" "$ARMHF_TOOLCHAIN_PREFIX"
+mkdir -p "$ARMHF_RUNTIME_PREFIX"
+cp -L "$ARMHF_SYSROOT$LINUX_FFTW_PREFIX"/lib/libfftw3f*.so* "$ARMHF_RUNTIME_PREFIX/"
+CC="$fftw_cc" CFLAGS="$fftw_cflags" LDFLAGS="$fftw_ldflags" \
+  /usr/local/share/wsjtx-ci/build-fftw-smoke-linux.sh \
+    /opt/wsjtx-ci/toolchain-smoke/fftw-smoke "$ARMHF_SYSROOT$LINUX_FFTW_PREFIX"
+for library in "${ARMHF_GCC_RUNTIME_LIBRARIES[@]}"; do
+  if [ "$ARMHF_DISTRO" = bookworm ]; then
+    source_path="$(armhf_sysroot_runtime_path "$library")"
+  else
+    source_path="$("$ARMHF_TOOLCHAIN_PREFIX/bin/$ARMHF_TARGET_TRIPLET-gcc" -print-file-name="$library")"
+    test "$source_path" != "$library"
+  fi
+  cp -L "$source_path" "$ARMHF_RUNTIME_PREFIX/$library"
+done
+test "$("$ARMHF_TOOLCHAIN_PREFIX/bin/$ARMHF_TARGET_TRIPLET-gcc" -print-file-name=libquadmath.so.0)" = libquadmath.so.0
+/usr/local/share/wsjtx-ci/build-armhf-toolchain-smoke.sh \
+  "$ARMHF_TOOLCHAIN_PREFIX" "$ARMHF_SYSROOT" /opt/wsjtx-ci/toolchain-smoke
+rm -rf /tmp/wsjtx-hamlib-build
+cp -L /usr/bin/qemu-arm-static "$ARMHF_QEMU_EXECUTABLE"

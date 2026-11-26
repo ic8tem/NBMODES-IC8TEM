@@ -1,0 +1,6 @@
+A UI for downloading sample files from a web server.
+
+Works in concert with  samples/CMakeLists.txt which generates the JSON
+contents description  file and has  a build target  stage-samples that
+copies the  samples and contents  file into a  feat-web-pages checkout
+for publication on GitHub Pages.

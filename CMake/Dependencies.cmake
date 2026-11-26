@@ -1,0 +1,164 @@
+#
+# Dependency detection -- included from the top-level CMakeLists.txt
+# at the equivalent point. Included (not add_subdirectory'd), so
+# CMAKE_CURRENT_SOURCE_DIR stays the project root and results (found
+# packages, RIGCTL*_EXE, LIBM_LIBRARIES, etc.) remain visible to the
+# rest of the top-level file exactly as when this was inline.
+#
+#
+# find some useful tools
+#
+include (CheckTypeSize)
+include (CheckCSourceCompiles)
+include (CheckIncludeFiles)
+include (CheckSymbolExists)
+include (generate_version_info)
+
+#
+# Platform checks
+#
+check_include_files ("stdlib.h;stdarg.h;string.h;float.h" STDC_HEADERS)
+check_include_files (stdio.h HAVE_STDIO_H)
+check_include_files (stdlib.h HAVE_STDLIB_H)
+check_include_files (unistd.h HAVE_UNISTD_H)
+check_include_files (sys/ioctl.h HAVE_SYS_IOCTL_H)
+check_include_files (sys/types.h HAVE_SYS_TYPES_H)
+check_include_files (fcntl.h HAVE_FCNTL_H)
+check_include_files (sys/stat.h HAVE_SYS_STAT_H)
+check_include_files ("linux/ppdev.h;linux/parport.h" HAVE_LINUX_PPDEV_H)
+check_include_files ("dev/ppbus/ppi.h;dev/ppbus/ppbconf.h" HAVE_DEV_PPBUS_PPI_H)
+
+#
+# Standard C Math Library
+#
+set (LIBM_TEST_SOURCE "#include<math.h>\nfloat f; int main(){sqrt(f);return 0;}")
+check_c_source_compiles ("${LIBM_TEST_SOURCE}" HAVE_MATH)
+if (HAVE_MATH)
+  set (LIBM_LIBRARIES)
+else ()
+  set (CMAKE_REQUIRED_LIBRARIES m)
+  check_c_source_compiles ("${LIBM_TEST_SOURCE}" HAVE_LIBM_MATH)
+  unset (CMAKE_REQUIRED_LIBRARIES)
+  if (NOT HAVE_LIBM_MATH)
+    message (FATAL_ERROR "Unable to use C math library functions")
+  endif ()
+  set (LIBM_LIBRARIES m)
+endif ()
+
+#
+# Boost
+#
+option (Boost_USE_STATIC_LIBS "Link Boost statically" OFF)
+find_package (Boost 1.62 REQUIRED COMPONENTS log_setup log)
+get_target_property (_boost_log_setup_links Boost::log_setup INTERFACE_LINK_LIBRARIES)
+if (NOT "Boost::log" IN_LIST _boost_log_setup_links)
+  # FindBoost reverses this dependency; static setup users also need the Log core.
+  get_target_property (_boost_log_links Boost::log INTERFACE_LINK_LIBRARIES)
+  if (_boost_log_links)
+    list (REMOVE_ITEM _boost_log_links Boost::log_setup)
+    set_property (TARGET Boost::log PROPERTY INTERFACE_LINK_LIBRARIES "${_boost_log_links}")
+  endif ()
+  set_property (TARGET Boost::log_setup APPEND PROPERTY INTERFACE_LINK_LIBRARIES Boost::log)
+endif ()
+unset (_boost_log_links)
+unset (_boost_log_setup_links)
+if (Boost_USE_STATIC_LIBS)
+  include ("${CMAKE_CURRENT_LIST_DIR}/Modules/verify_static_boost.cmake")
+  wsjt_verify_static_boost (Boost::log_setup Boost::log)
+endif ()
+
+#
+# OpenMP
+#
+find_package (OpenMP)
+
+if (APPLE)
+  set (WSJT_MACOS_LIBGOMP_LIBRARY "" CACHE FILEPATH "Path to the static GNU OpenMP runtime archive")
+  if (NOT WSJT_MACOS_LIBGOMP_LIBRARY)
+    execute_process (
+      COMMAND ${CMAKE_Fortran_COMPILER} -print-file-name=libgomp.a
+      OUTPUT_VARIABLE WSJT_MACOS_LIBGOMP_LIBRARY
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+      )
+  endif ()
+  if (NOT WSJT_MACOS_LIBGOMP_LIBRARY OR NOT EXISTS "${WSJT_MACOS_LIBGOMP_LIBRARY}")
+    message (FATAL_ERROR "Static GNU OpenMP runtime archive not found. Set WSJT_MACOS_LIBGOMP_LIBRARY to libgomp.a for deployable macOS builds.")
+  endif ()
+endif ()
+
+#
+# fftw3 single precision library
+#
+find_package (FFTW3 COMPONENTS single threads REQUIRED)
+
+#
+# hamlib setup
+#
+find_package (Hamlib REQUIRED)
+find_program (RIGCTL_EXE rigctl)
+find_program (RIGCTLD_EXE rigctld)
+find_program (RIGCTLCOM_EXE rigctlcom)
+
+check_type_size (CACHE_ALL HAMLIB_OLD_CACHING)
+set (CMAKE_REQUIRED_INCLUDES ${Hamlib_INCLUDE_DIR})
+set (CMAKE_REQUIRED_LIBRARIES Hamlib::Hamlib)
+check_symbol_exists (rig_set_cache_timeout_ms "hamlib/rig.h" HAVE_HAMLIB_CACHE_TIMEOUT)
+set (HAVE_HAMLIB_CACHING ${HAVE_HAMLIB_CACHE_TIMEOUT})
+check_c_source_compiles ("
+#include <hamlib/rig.h>
+int main(void) { return sizeof(&rig_get_conf2) > 0 ? 0 : 1; }
+" HAVE_HAMLIB_GET_CONF2)
+unset (CMAKE_REQUIRED_INCLUDES)
+unset (CMAKE_REQUIRED_LIBRARIES)
+
+find_package (Usb REQUIRED)
+
+if (WSJT_FOX_OTP)
+  add_definitions (-DFOX_OTP)
+endif ()
+
+#
+# Qt5 setup
+#
+
+# Widgets finds its own dependencies.
+find_package (Qt5 COMPONENTS Widgets SerialPort Multimedia PrintSupport Sql LinguistTools WebSockets Concurrent REQUIRED)
+
+if (CMAKE_CROSSCOMPILING)
+  if (NOT WSJT_QT_HOST_PATH)
+    message (FATAL_ERROR
+      "WSJT_QT_HOST_PATH is required when cross-compiling with Qt 5")
+  endif ()
+  foreach (_qt_tool IN ITEMS qmake moc uic rcc lrelease lupdate lconvert)
+    if (TARGET Qt5::${_qt_tool})
+      set (_qt_host_tool "${WSJT_QT_HOST_PATH}/${_qt_tool}${CMAKE_HOST_EXECUTABLE_SUFFIX}")
+      if (NOT EXISTS "${_qt_host_tool}")
+        message (FATAL_ERROR "Native Qt tool not found: ${_qt_host_tool}")
+      endif ()
+      set_property (TARGET Qt5::${_qt_tool} PROPERTY IMPORTED_LOCATION "${_qt_host_tool}")
+      foreach (_qt_config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_property (TARGET Qt5::${_qt_tool} PROPERTY
+          IMPORTED_LOCATION_${_qt_config} "${_qt_host_tool}")
+      endforeach ()
+    endif ()
+  endforeach ()
+  unset (_qt_config)
+  unset (_qt_host_tool)
+  unset (_qt_tool)
+endif ()
+
+if (WIN32)
+  add_definitions (-DQT_NEEDS_QTMAIN)
+  find_package (Qt5AxContainer REQUIRED)
+endif (WIN32)
+
+#
+# Library building setup
+#
+include (GenerateExportHeader)
+set (CMAKE_CXX_VISIBILITY_PRESET hidden)
+set (CMAKE_C_VISIBILITY_PRESET hidden)
+set (CMAKE_Fortran_VISIBILITY_PRESET hidden)
+set (CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+#set (CMAKE_INCLUDE_CURRENT_DIR_IN_INTERFACE ON)

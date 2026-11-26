@@ -1,0 +1,59 @@
+You can use _WSJT-X_ on any 64-bit Linux system by downloading and
+executing the appropriate "AppImage" file from the {downloads}. These
+packages contain all required dependencies for use of _WSJT-X_, but
+they do not provide access to _MAP65_, _QMAP_, or any of the related
+utility programs.
+
+Complete installation packages are provided on the {downloads} for
+64-bit Debian-based and RedHat-based Linux systems. Be sure to fetch
+the package built for your machine's architecture: it will have
+`x86_64` in the file name for Intel/AMD machines, `aarch64` for ARM.
+
+For 32-bit ARM systems, releases provide separate `armhf-bookworm` and
+`armhf-trixie` builds. Choose Bookworm for Debian 12 or Raspberry Pi OS
+Bookworm, and Trixie for Debian 13 or Raspberry Pi OS Trixie. Both builds
+contain the same _WSJT-X_ version; their library dependencies match the
+respective operating system. Keeping the Bookworm build preserves support
+for that older system. The packages are alternatives and cannot be
+installed together.
+
+The Bookworm and Trixie labels also appear on ARMHF AppImages, RPMs, and
+command-line archives to identify their build baselines. An RPM built on
+Debian is intended for an RPM-based system with compatible libraries; the
+label does not imply compatibility with every RPM-based distribution.
+Use the `.deb` format on Debian-based systems. ARMHF AppImages and archives
+should likewise be selected for the matching operating-system baseline.
+
+* To install on Debian-based Linux, for example Ubuntu 22.x or later,
+execute the following command in a terminal:
++
+[example]
+sudo apt install ./<package-name>
+
+APT installs the package's required dependencies from the configured
+repositories. On ARMHF, use the package matching the operating-system
+release; adding dependencies from another Debian release can mix
+incompatible libraries.
+
+* To uninstall:
++
+[example]
+sudo dpkg -P wsjtx
+
+* To install on Fedora, CentOS, Red Hat, and other rpm-based systems:
++
+[example]
+sudo rpm -i <package-name>
+
+* To uninstall:
++
+[example]
+sudo rpm -e wsjtx
+
+You may also need to execute the following command in a terminal:
+
+....
+sudo dnf install libgfortran fftw-libs-single qt5-qtbase \
+     qt5-qtmultimedia qt5-qtserialport qt5-qtsvg \
+     qt5-qtserialport libgomp boost libusbx portaudio
+....

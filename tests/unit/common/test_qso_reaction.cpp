@@ -1,0 +1,1098 @@
+#include <QtTest>
+
+#include "QsoReactionTestSupport.hpp"
+
+namespace
+{
+  using namespace QsoReactionTestSupport;
+
+  Snapshot baseSnapshot()
+  {
+    auto snapshot = neutralStationSnapshot();
+    snapshot.mode = "FT8";
+    snapshot.tx1Enabled = true;
+    return snapshot;
+  }
+
+  struct FinalState
+  {
+    int txMessage;
+    QsoProgress progress;
+  };
+
+  FinalState finalState(Plan const& plan, Snapshot const& snapshot)
+  {
+    FinalState state {snapshot.selectedTxMessage, snapshot.qsoProgress};
+    for (auto const& effect : plan.effects) {
+      if (effect.kind == Effect::Kind::SetTxMessage
+          || effect.kind == Effect::Kind::SetTxMessageIndex
+          || effect.kind == Effect::Kind::CheckTxMessage
+          || effect.kind == Effect::Kind::ClickTxMessage) {
+        state.txMessage = effect.intValue;
+      } else if (effect.kind == Effect::Kind::SetQsoProgress) {
+        state.progress = effect.progress;
+      }
+    }
+    return state;
+  }
+}
+
+class TestQsoReaction final
+  : public QObject
+{
+  Q_OBJECT
+
+private slots:
+  void qsoProgressValuesMatchDecoderContract()
+  {
+    QCOMPARE(static_cast<int>(QsoProgress::Calling), 0);
+    QCOMPARE(static_cast<int>(QsoProgress::Replying), 1);
+    QCOMPARE(static_cast<int>(QsoProgress::Report), 2);
+    QCOMPARE(static_cast<int>(QsoProgress::RogerReport), 3);
+    QCOMPARE(static_cast<int>(QsoProgress::Rogers), 4);
+    QCOMPARE(static_cast<int>(QsoProgress::Signoff), 5);
+  }
+
+  void rrrAutoTxShutdownPolicy_data()
+  {
+    QTest::addColumn<QString>("mode");
+    QTest::addColumn<bool>("repeatTx");
+    QTest::addColumn<bool>("sendRr73");
+    QTest::addColumn<bool>("expectedDefer");
+
+    QTest::newRow("MSK144 RRR") << "MSK144" << false << false << true;
+    QTest::newRow("MSK144 RRR repeat") << "MSK144" << true << false << true;
+    QTest::newRow("MSK144 RR73 repeat") << "MSK144" << true << true << false;
+    QTest::newRow("Q65 RRR") << "Q65" << false << false << false;
+    QTest::newRow("Q65 RRR repeat") << "Q65" << true << false << true;
+    QTest::newRow("Q65 RR73 repeat") << "Q65" << true << true << false;
+    QTest::newRow("FT8 RRR") << "FT8" << true << false << false;
+  }
+
+  void rrrAutoTxShutdownPolicy()
+  {
+    QFETCH(QString, mode);
+    QFETCH(bool, repeatTx);
+    QFETCH(bool, sendRr73);
+    QFETCH(bool, expectedDefer);
+
+    QCOMPARE(DecodedMessageReaction::shouldDeferAutoTxStopAfterRrr(mode, repeatTx, sendRr73),
+             expectedDefer);
+
+    bool stopCalled {false};
+    DecodedMessageReaction::applyAutoTxStopAfterLogging(
+      mode, repeatTx, sendRr73, [&stopCalled] { stopCalled = true; });
+    QCOMPARE(stopCalled, !expectedDefer);
+  }
+
+  void repeatFinal73_data()
+  {
+    QTest::addColumn<QString>("mode");
+    QTest::addColumn<bool>("loggingEnabled");
+    QTest::addColumn<bool>("logRequested");
+    QTest::addColumn<bool>("replyPending");
+    for (auto const& mode : {QString {"MSK144"}, QString {"Q65"}}) {
+      for (bool logging : {false, true}) {
+        for (bool requested : {false, true}) {
+          for (bool pending : {false, true}) {
+            auto const name = QString {"%1-log%2-requested%3-pending%4"}
+              .arg(mode).arg(logging).arg(requested).arg(pending).toLatin1();
+            QTest::newRow(name.constData()) << mode << logging << requested << pending;
+          }
+        }
+      }
+    }
+  }
+
+  void repeatFinal73()
+  {
+    QFETCH(QString, mode);
+    QFETCH(bool, loggingEnabled);
+    QFETCH(bool, logRequested);
+    QFETCH(bool, replyPending);
+    auto snapshot = baseSnapshot();
+    snapshot.mode = mode;
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.autoEnabled = true;
+    snapshot.sentFirst73 = true;
+    snapshot.repeatTx = true;
+    snapshot.sendRr73 = true;
+    snapshot.loggingEnabled = loggingEnabled;
+    snapshot.completion = {replyPending ? QsoCompletionPhase::FinalReplyPending
+                                        : QsoCompletionPhase::AwaitingFinal73, logRequested};
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW 73", mode == "MSK144" ? "&" : ":"), snapshot);
+
+    QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::Reacted);
+    QCOMPARE(effectIndex(plan, Effect::Kind::RecordFinalConfirmation), replyPending ? -1 : 0);
+    QCOMPARE(effectCount(plan, Effect::Kind::RequestLogQso),
+             int(loggingEnabled && !logRequested && !replyPending));
+    QCOMPARE(hasEffect(plan, Effect::Kind::ScheduleRepeatFinish),
+             mode == "MSK144" && !replyPending);
+    QCOMPARE(hasEffect(plan, Effect::Kind::FinishRepeat), mode == "Q65" && !replyPending);
+    if (mode == "MSK144" && !replyPending) {
+      QCOMPARE(intEffect(plan, Effect::Kind::ScheduleRepeatFinish), 11250);
+    }
+    QVERIFY(!hasEffect(plan, Effect::Kind::CeaseAutoTx));
+    QVERIFY(!hasEffect(plan, Effect::Kind::SetTxMessageIndex));
+    QVERIFY(!hasEffect(plan, Effect::Kind::ScheduleAutoFlagOff));
+    if (replyPending) QVERIFY(plan.effects.isEmpty());
+  }
+
+  void repeatAllowsExplicitPartnerSelection_data()
+  {
+    QTest::addColumn<QString>("mode");
+    QTest::addColumn<int>("origin");
+    using Origin = DecodedMessageReaction::SelectionOrigin;
+    for (auto const& mode : {QString {"MSK144"}, QString {"Q65"}}) {
+      for (auto origin : {Origin::ManualLeftPane, Origin::ManualRightPane, Origin::Udp,
+                          Origin::None}) {
+        auto const name = QString {"%1-origin%2"}.arg(mode).arg(int(origin)).toLatin1();
+        QTest::newRow(name.constData()) << mode << int(origin);
+      }
+    }
+  }
+
+  void repeatAllowsExplicitPartnerSelection()
+  {
+    QFETCH(QString, mode);
+    QFETCH(int, origin);
+    using Origin = DecodedMessageReaction::SelectionOrigin;
+    auto snapshot = baseSnapshot();
+    snapshot.mode = mode;
+    snapshot.fastMode = mode == "MSK144";
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.autoEnabled = true;
+    snapshot.repeatTx = true;
+    snapshot.sendRr73 = true;
+    snapshot.completion = {QsoCompletionPhase::AwaitingFinal73, true};
+    snapshot.selectionOrigin = static_cast<Origin>(origin);
+    snapshot.doubleClicked = snapshot.selectionOrigin == Origin::ManualLeftPane
+      || snapshot.selectionOrigin == Origin::ManualRightPane;
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K9XYZ K2BCD 73", mode == "MSK144" ? "&" : ":"), snapshot);
+
+    if (snapshot.selectionOrigin == Origin::None) {
+      QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::NoReaction);
+      QVERIFY(plan.effects.isEmpty());
+    } else {
+      QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::Reacted);
+      QCOMPARE(textEffect(plan, Effect::Kind::SetDxCall), QString {"K2BCD"});
+      QCOMPARE(intEffect(plan, Effect::Kind::SetTxMessageIndex), 1);
+    }
+    QVERIFY(!hasEffect(plan, Effect::Kind::ScheduleRepeatFinish));
+    QVERIFY(!hasEffect(plan, Effect::Kind::FinishRepeat));
+    QVERIFY(!hasEffect(plan, Effect::Kind::RequestLogQso));
+  }
+
+  void received73WithoutRepeatContextRetainsNormalSignoff_data()
+  {
+    QTest::addColumn<QString>("mode");
+    QTest::addColumn<bool>("loggingEnabled");
+    QTest::newRow("MSK144 without logging") << QString {"MSK144"} << false;
+    QTest::newRow("MSK144 with logging") << QString {"MSK144"} << true;
+    QTest::newRow("Q65 without logging") << QString {"Q65"} << false;
+    QTest::newRow("Q65 with logging") << QString {"Q65"} << true;
+  }
+
+  void received73WithoutRepeatContextRetainsNormalSignoff()
+  {
+    QFETCH(QString, mode);
+    QFETCH(bool, loggingEnabled);
+    auto snapshot = baseSnapshot();
+    snapshot.mode = mode;
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.repeatTx = true;
+    snapshot.sendRr73 = true;
+    snapshot.loggingEnabled = loggingEnabled;
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW 73", mode == "MSK144" ? "&" : ":"), snapshot);
+
+    QCOMPARE(hasEffect(plan, Effect::Kind::RequestLogQso), loggingEnabled);
+    QCOMPARE(hasEffect(plan, Effect::Kind::CeaseAutoTx), !loggingEnabled);
+    QCOMPARE(intEffect(plan, Effect::Kind::SetTxMessageIndex), 6);
+    QVERIFY(!hasEffect(plan, Effect::Kind::ScheduleAutoFlagOff));
+    QVERIFY(!hasEffect(plan, Effect::Kind::ScheduleRepeatFinish));
+    QVERIFY(!hasEffect(plan, Effect::Kind::FinishRepeat));
+  }
+
+  void q65Final73LoggingStopsAutoTxWhenRepeatIsDisabled()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "Q65";
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.loggingEnabled = true;
+    snapshot.repeatTx = false;
+    snapshot.sendRr73 = false;
+
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW 73", ":"), snapshot);
+
+    QVERIFY(hasEffect(plan, Effect::Kind::RequestLogQso));
+    QCOMPARE(intEffect(plan, Effect::Kind::SetTxMessageIndex), 6);
+    QVERIFY(!hasEffect(plan, Effect::Kind::ScheduleAutoFlagOff));
+    QVERIFY(!DecodedMessageReaction::shouldDeferAutoTxStopAfterRrr(
+      snapshot.mode, snapshot.repeatTx, snapshot.sendRr73));
+  }
+
+  void responseTransitions_data()
+  {
+    QTest::addColumn<int>("initialProgress");
+    QTest::addColumn<QString>("response");
+    QTest::addColumn<int>("expectedTxMessage");
+    QTest::addColumn<int>("expectedProgress");
+    QTest::addColumn<bool>("expectedReaction");
+
+    QStringList const responses {"FN31", "-10", "R", "R-10", "RRR", "RR73", "73"};
+    for (int initial = 0; initial <= 5; ++initial) {
+      for (auto const& response : responses) {
+        int tx = -1;
+        int progress = initial;
+        bool reacts = true;
+        if (response == "FN31") {
+          tx = 2;
+          progress = 2;
+        } else if (response == "-10") {
+          tx = 3;
+          progress = 3;
+        } else if (response == "R") {
+          tx = initial == 3 ? 5 : 4;
+          if (initial == 2) progress = 4;
+          else if (initial >= 3) progress = 5;
+        } else if (response == "R-10") {
+          tx = 4;
+          progress = 4;
+        } else if (response == "RRR" || response == "RR73") {
+          tx = 5;
+          if (initial >= 3) progress = 5;
+        } else if (initial == 4) {
+          tx = 6;
+          progress = 5;
+        } else {
+          tx = 0;
+        }
+        QByteArray const name = QByteArray::number(initial) + '-' + response.toLatin1();
+        QTest::newRow(name.constData()) << initial << response << tx << progress << reacts;
+      }
+    }
+  }
+
+  void responseTransitions()
+  {
+    QFETCH(int, initialProgress);
+    QFETCH(QString, response);
+    QFETCH(int, expectedTxMessage);
+    QFETCH(int, expectedProgress);
+    QFETCH(bool, expectedReaction);
+
+    auto snapshot = baseSnapshot();
+    snapshot.qsoProgress = static_cast<QsoProgress>(initialProgress);
+    QString const payload = response == "R"
+      ? "<K1ABC> W1AW R" : "K1ABC W1AW " + response;
+    auto const plan = DecodedMessageReaction::planProcessMessage(decode(payload), snapshot);
+
+    QCOMPARE(plan.disposition == DecodedMessageReaction::ReactionDisposition::Reacted,
+             expectedReaction);
+    if (expectedReaction) {
+      auto const state = finalState(plan, snapshot);
+      QCOMPARE(state.txMessage, expectedTxMessage);
+      QCOMPARE(static_cast<int>(state.progress), expectedProgress);
+    }
+  }
+
+  void tx1AvailabilityControlsFallback_data()
+  {
+    QTest::addColumn<bool>("tx1Enabled");
+    QTest::addColumn<int>("expectedTxMessage");
+    QTest::addColumn<int>("expectedProgress");
+    QTest::newRow("tx1") << true << 1 << 1;
+    QTest::newRow("tx2-fallback") << false << 2 << 2;
+  }
+
+  void tx1AvailabilityControlsFallback()
+  {
+    QFETCH(bool, tx1Enabled);
+    QFETCH(int, expectedTxMessage);
+    QFETCH(int, expectedProgress);
+    auto snapshot = baseSnapshot();
+    snapshot.tx1Enabled = tx1Enabled;
+    snapshot.dxCall.clear();
+    snapshot.hisCall.clear();
+
+    auto const plan = DecodedMessageReaction::planProcessMessage(decode("CQ W1AW FN31"), snapshot);
+    auto const state = finalState(plan, snapshot);
+    QCOMPARE(state.txMessage, expectedTxMessage);
+    QCOMPARE(static_cast<int>(state.progress), expectedProgress);
+  }
+
+  void signoffLogsOrCeasesAuto_data()
+  {
+    QTest::addColumn<bool>("loggingEnabled");
+    QTest::addColumn<int>("expectedEffect");
+    QTest::newRow("log") << true << static_cast<int>(Effect::Kind::RequestLogQso);
+    QTest::newRow("cease") << false << static_cast<int>(Effect::Kind::CeaseAutoTx);
+  }
+
+  void signoffLogsOrCeasesAuto()
+  {
+    QFETCH(bool, loggingEnabled);
+    QFETCH(int, expectedEffect);
+    auto snapshot = baseSnapshot();
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.loggingEnabled = loggingEnabled;
+
+    auto const plan = DecodedMessageReaction::planProcessMessage(decode("K1ABC W1AW 73"), snapshot);
+    QVERIFY(effectIndex(plan, static_cast<Effect::Kind>(expectedEffect)) >= 0);
+  }
+
+  void sharedTailRequestsRestartQuickCallAndRegeneration()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.doubleClicked = true;
+    snapshot.selectionOrigin = DecodedMessageReaction::SelectionOrigin::ManualLeftPane;
+    snapshot.quickCall = true;
+    snapshot.transmitting = true;
+
+    auto const plan = DecodedMessageReaction::planProcessMessage(decode("K1ABC W1AW -10"), snapshot);
+
+    QVERIFY(effectIndex(plan, Effect::Kind::SetReport) >= 0);
+    QVERIFY(effectIndex(plan, Effect::Kind::GenerateStandardMessages) >= 0);
+    QVERIFY(effectIndex(plan, Effect::Kind::SetRestart) >= 0);
+    QVERIFY(effectIndex(plan, Effect::Kind::SetAutoEnabled) >= 0);
+  }
+
+  void quickCallPreservesLocalTransmitIntent_data()
+  {
+    QTest::addColumn<int>("origin");
+    QTest::addColumn<bool>("local");
+    using Origin = DecodedMessageReaction::SelectionOrigin;
+    QTest::newRow("manual-left") << int(Origin::ManualLeftPane) << true;
+    QTest::newRow("manual-right") << int(Origin::ManualRightPane) << true;
+    QTest::newRow("udp") << int(Origin::Udp) << false;
+    QTest::newRow("automatic-selection") << int(Origin::AutomaticSelection) << false;
+    QTest::newRow("synthetic") << int(Origin::Synthetic) << false;
+  }
+
+  void quickCallPreservesLocalTransmitIntent()
+  {
+    QFETCH(int, origin);
+    QFETCH(bool, local);
+    auto snapshot = baseSnapshot();
+    snapshot.doubleClicked = true;
+    snapshot.quickCall = true;
+    snapshot.selectionOrigin = static_cast<DecodedMessageReaction::SelectionOrigin>(origin);
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW -10"), snapshot);
+    auto const index = effectIndex(plan, Effect::Kind::SetAutoEnabled);
+    QVERIFY(index >= 0);
+    QVERIFY(plan.effects[index].boolValue);
+    QCOMPARE(plan.effects[index].userInitiated, local);
+  }
+
+  void jt65OooSelectsRogerReport()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "JT65";
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW FN31 OOO", "#"), snapshot);
+    auto const state = finalState(plan, snapshot);
+    QCOMPARE(state.txMessage, 3);
+    QCOMPARE(state.progress, QsoProgress::RogerReport);
+  }
+
+  void dualFoxMessagePreservesCurrentDisposition()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.loggingEnabled = true;
+    auto const message = decode("K1ABC RR73; W2XX W1AW -10");
+    auto const plan = DecodedMessageReaction::planProcessMessage(message, snapshot);
+    QCOMPARE(message.messageWords().size(), 7);
+    QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::NoReaction);
+    QVERIFY(effectIndex(plan, Effect::Kind::RequestLogQso) < 0);
+  }
+
+  void freeTextSignoffSelectsTx5()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.qsoProgress = QsoProgress::RogerReport;
+    auto const plan = DecodedMessageReaction::planProcessMessage(decode("TNX QSO 73"), snapshot);
+    auto const state = finalState(plan, snapshot);
+    QCOMPARE(state.txMessage, 5);
+    QCOMPARE(state.progress, QsoProgress::Signoff);
+    int const select = effectIndex(plan, Effect::Kind::SetTxMessageIndex);
+    int const check = effectIndex(plan, Effect::Kind::CheckTxMessage, select + 1);
+    int const progress = effectIndex(plan, Effect::Kind::SetQsoProgress, check + 1);
+    QVERIFY(select >= 0 && check > select && progress > check);
+  }
+
+  void repeatTxUsesClickableTx5AndLiveAutoTimer()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "Q65";
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.repeatTx = true;
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW 73", ":"), snapshot);
+    QCOMPARE(intEffect(plan, Effect::Kind::ClickTxMessage), 5);
+    QCOMPARE(intEffect(plan, Effect::Kind::ScheduleAutoFlagOff), 15000);
+  }
+
+  void contestGridPolicies_data()
+  {
+    QTest::addColumn<int>("specOp");
+    QTest::addColumn<QString>("mode");
+    QTest::addColumn<QString>("marker");
+    QTest::addColumn<int>("expectedTx");
+    QTest::addColumn<int>("expectedProgress");
+    QTest::newRow("normal") << int(SpecialOperatingActivity::NONE) << "FT8" << "~" << 2 << 2;
+    QTest::newRow("na-vhf") << int(SpecialOperatingActivity::NA_VHF) << "FT8" << "~" << 3 << 3;
+    QTest::newRow("ww-digi") << int(SpecialOperatingActivity::WW_DIGI) << "FT8" << "~" << 3 << 3;
+    QTest::newRow("arrl-digi") << int(SpecialOperatingActivity::ARRL_DIGI) << "FT8" << "~" << 3 << 3;
+    QTest::newRow("q65-pileup") << int(SpecialOperatingActivity::Q65_PILEUP) << "Q65" << ":" << 3 << 3;
+  }
+
+  void contestGridPolicies()
+  {
+    QFETCH(int, specOp);
+    QFETCH(QString, mode);
+    QFETCH(QString, marker);
+    QFETCH(int, expectedTx);
+    QFETCH(int, expectedProgress);
+    auto snapshot = baseSnapshot();
+    snapshot.specOp = static_cast<SpecialOperatingActivity>(specOp);
+    snapshot.mode = mode;
+    auto const state = finalState(
+      DecodedMessageReaction::planProcessMessage(decode("K1ABC W1AW FN31", marker), snapshot),
+      snapshot);
+    QCOMPARE(state.txMessage, expectedTx);
+    QCOMPARE(static_cast<int>(state.progress), expectedProgress);
+  }
+
+  void contestExchangePolicies()
+  {
+    auto eu = baseSnapshot();
+    eu.specOp = SpecialOperatingActivity::EU_VHF;
+    auto euPlan = DecodedMessageReaction::planProcessMessage(
+      decode("<K1ABC> W1AW 520001 FN31"), eu);
+    QCOMPARE(finalState(euPlan, eu).progress, QsoProgress::RogerReport);
+
+    auto rtty = baseSnapshot();
+    rtty.specOp = SpecialOperatingActivity::RTTY;
+    auto rttyPlan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW 599 0001"), rtty);
+    QCOMPARE(finalState(rttyPlan, rtty).progress, QsoProgress::RogerReport);
+    QVERIFY(effectIndex(rttyPlan, Effect::Kind::SetReceivedExchange) >= 0);
+
+    auto fieldDay = baseSnapshot();
+    fieldDay.specOp = SpecialOperatingActivity::FIELD_DAY;
+    auto fieldDayPlan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW R 1D EMA"), fieldDay);
+    QCOMPARE(finalState(fieldDayPlan, fieldDay).progress, QsoProgress::Rogers);
+  }
+
+  void euVhfReportBoundaries_data()
+  {
+    QTest::addColumn<int>("exchange");
+    QTest::addColumn<bool>("valid");
+    QTest::newRow("below-report") << 510001 << false;
+    QTest::newRow("lower") << 520001 << true;
+    QTest::newRow("upper") << 592047 << true;
+    QTest::newRow("above-serial") << 592048 << false;
+  }
+
+  void euVhfReportBoundaries()
+  {
+    QFETCH(int, exchange);
+    QFETCH(bool, valid);
+    auto snapshot = baseSnapshot();
+    snapshot.dxCall.clear();
+    snapshot.hisCall.clear();
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode(QString {"<K1ABC> W1AW %1 FN31"}.arg(exchange)), snapshot);
+    QCOMPARE(effectIndex(plan, Effect::Kind::QueueContestHint) >= 0, valid);
+  }
+
+  void contestHints_data()
+  {
+    QTest::addColumn<QString>("payload");
+    QTest::addColumn<int>("expectedHint");
+
+    QTest::newRow("eu-vhf")
+      << "<K1ABC> W1AW 520001 FN31" << int(DecodedMessageReaction::ContestHint::EuVhf);
+    QTest::newRow("field-day")
+      << "K1ABC W1AW R 1D EMA" << int(DecodedMessageReaction::ContestHint::FieldDay);
+    QTest::newRow("rtty")
+      << "K1ABC W1AW 599 0001" << int(DecodedMessageReaction::ContestHint::Rtty);
+  }
+
+  void contestHints()
+  {
+    QFETCH(QString, payload);
+    QFETCH(int, expectedHint);
+    auto snapshot = baseSnapshot();
+
+    auto const plan = DecodedMessageReaction::planProcessMessage(decode(payload), snapshot);
+
+    QCOMPARE(effectCount(plan, Effect::Kind::QueueContestHint), 1);
+    int const hint = effectIndex(plan, Effect::Kind::QueueContestHint);
+    QCOMPARE(int(plan.effects[hint].contestHint), expectedHint);
+  }
+
+  void shownContestHintSuppressesFurtherHints()
+  {
+    QStringList const payloads {
+      "<K1ABC> W1AW 520001 FN31",
+      "K1ABC W1AW R 1D EMA",
+      "K1ABC W1AW 599 0001"
+    };
+    auto snapshot = baseSnapshot();
+    snapshot.contestHintShown = true;
+
+    for (auto const& payload : payloads) {
+      auto const plan = DecodedMessageReaction::planProcessMessage(decode(payload), snapshot);
+      QCOMPARE(effectCount(plan, Effect::Kind::QueueContestHint), 0);
+    }
+  }
+
+  void fieldDayExchangePrecedesContestHint()
+  {
+    auto snapshot = baseSnapshot();
+
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW R 1D EMA"), snapshot);
+
+    int const exchange = effectIndex(plan, Effect::Kind::SetReceivedExchange);
+    int const hint = effectIndex(plan, Effect::Kind::QueueContestHint);
+    QVERIFY(exchange >= 0 && hint > exchange);
+  }
+
+  void msk144ReportNormalization_data()
+  {
+    QTest::addColumn<int>("input");
+    QTest::addColumn<int>("expected");
+    QTest::newRow("negative") << -2 << -3;
+    QTest::newRow("zero-low") << -1 << 0;
+    QTest::newRow("zero-high") << 1 << 0;
+    QTest::newRow("three-low") << 2 << 3;
+    QTest::newRow("three-high") << 4 << 3;
+    QTest::newRow("six-low") << 5 << 6;
+    QTest::newRow("six-high") << 7 << 6;
+    QTest::newRow("ten-low") << 8 << 10;
+    QTest::newRow("ten-high") << 11 << 10;
+    QTest::newRow("thirteen-low") << 12 << 13;
+    QTest::newRow("thirteen-high") << 14 << 13;
+    QTest::newRow("sixteen") << 15 << 16;
+  }
+
+  void msk144ReportNormalization()
+  {
+    QFETCH(int, input);
+    QFETCH(int, expected);
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "MSK144";
+    snapshot.shortMessages = true;
+    DecodedText const message {
+      QString {"060522 %1  0.3 1500 &  K1ABC W1AW -10"}.arg(input, 3)};
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      message, snapshot);
+    QVERIFY2(plan.disposition == DecodedMessageReaction::ReactionDisposition::Reacted,
+             qPrintable(plan.reason));
+    QCOMPARE(intEffect(plan, Effect::Kind::SetReport), expected);
+  }
+
+  void fallbackSelectionUsesMessageTokens_data()
+  {
+    QTest::addColumn<QString>("payload");
+    QTest::addColumn<bool>("preservesReport");
+    QTest::newRow("cq") << "CQ W1AW FN31" << false;
+    QTest::newRow("numbered-cq") << "CQ 173 W1AW FN31" << false;
+    QTest::newRow("rrr") << "K9XYZ W1AW RRR" << false;
+    QTest::newRow("rr73") << "K9XYZ W1AW RR73" << true;
+    QTest::newRow("73") << "K9XYZ W1AW 73" << true;
+  }
+
+  void fallbackSelectionUsesMessageTokens()
+  {
+    QFETCH(QString, payload);
+    QFETCH(bool, preservesReport);
+    using Origin = DecodedMessageReaction::SelectionOrigin;
+    for (int frequency : {1473, 1474}) {
+      for (bool padded : {false, true}) {
+        auto const message = decode(padded ? payload.leftJustified(37, ' ') : payload,
+                                    "~", "060500", frequency);
+        QVERIFY(message.isStandardMessage());
+        for (auto const origin : {Origin::Synthetic, Origin::ManualLeftPane, Origin::Udp}) {
+          for (bool autoEnabled : {false, true}) {
+            for (int selectedMessage : {2, 3}) {
+              auto snapshot = baseSnapshot();
+              snapshot.autoEnabled = autoEnabled;
+              snapshot.selectedTxMessage = selectedMessage;
+              snapshot.qsoProgress = QsoProgress::RogerReport;
+              snapshot.selectionOrigin = origin;
+              snapshot.doubleClicked = origin != Origin::Synthetic;
+              auto const plan = DecodedMessageReaction::planProcessMessage(message, snapshot);
+              QVERIFY2(plan.disposition == DecodedMessageReaction::ReactionDisposition::Reacted,
+                       qPrintable(plan.reason));
+              bool const preserve = preservesReport && autoEnabled && selectedMessage == 3
+                && origin == Origin::Synthetic;
+              auto const state = finalState(plan, snapshot);
+              QCOMPARE(state.txMessage, preserve ? selectedMessage : 1);
+              QCOMPARE(state.progress, preserve ? snapshot.qsoProgress : QsoProgress::Replying);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  void selectionOrigins_data()
+  {
+    QTest::addColumn<int>("origin");
+    QTest::addColumn<bool>("transmittingSignoff");
+    QTest::addColumn<bool>("reacts");
+    QTest::newRow("manual") << int(DecodedMessageReaction::SelectionOrigin::ManualLeftPane) << true << true;
+    QTest::newRow("synthetic") << int(DecodedMessageReaction::SelectionOrigin::Synthetic) << true << true;
+    QTest::newRow("udp-guard") << int(DecodedMessageReaction::SelectionOrigin::Udp) << true << false;
+  }
+
+  void selectionOrigins()
+  {
+    QFETCH(int, origin);
+    QFETCH(bool, transmittingSignoff);
+    QFETCH(bool, reacts);
+    auto snapshot = baseSnapshot();
+    snapshot.doubleClicked = true;
+    snapshot.selectionOrigin = static_cast<DecodedMessageReaction::SelectionOrigin>(origin);
+    snapshot.transmittingSignoff = transmittingSignoff;
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW RR73"), snapshot);
+    QCOMPARE(plan.disposition == DecodedMessageReaction::ReactionDisposition::Reacted, reacts);
+  }
+
+  void waitRequiresSelectedStation_data()
+  {
+    QTest::addColumn<QString>("payload");
+    QTest::addColumn<QString>("selectedCall");
+    QTest::addColumn<bool>("waitAndCall");
+    QTest::addColumn<bool>("expectedReaction");
+
+    QTest::newRow("reply") << "K1ABC W1AW -10" << "W1AW" << false << true;
+    QTest::newRow("hashed reply") << "<K1ABC> <W1AW> -10" << "W1AW" << false << true;
+    QTest::newRow("longer sender") << "K1ABC W1AWX -10" << "W1AW" << false << false;
+    QTest::newRow("shorter sender") << "K1ABC W1AW -10" << "W1AWX" << false << false;
+    QTest::newRow("portable sender") << "K1ABC W1AW/P -10" << "W1AW" << false << true;
+    QTest::newRow("selected portable") << "K1ABC W1AW/P -10" << "W1AW/P" << false << true;
+    QTest::newRow("selected compound") << "K1ABC W1AW -10" << "EA8/W1AW" << false << true;
+    QTest::newRow("other recipient") << "K1ABCD W1AW -10" << "W1AW" << false << false;
+    QTest::newRow("unresolved sender") << "K1ABC <...> -10" << "W1AW" << false << false;
+    QTest::newRow("unresolved recipient") << "<...> W1AW -10" << "W1AW" << false << false;
+    QTest::newRow("cq") << "CQ W1AW FN31" << "W1AW" << true << true;
+    QTest::newRow("directional cq") << "CQ DX W1AW FN31" << "W1AW" << true << true;
+    QTest::newRow("continent cq") << "CQ EU W1AW FN31" << "W1AW" << true << true;
+    QTest::newRow("test cq") << "CQ TEST W1AW FN31" << "W1AW" << true << true;
+    QTest::newRow("numeric cq") << "CQ 123 W1AW FN31" << "W1AW" << true << true;
+    QTest::newRow("cq longer sender") << "CQ W1AWX FN31" << "W1AW" << true << false;
+    QTest::newRow("cq portable sender") << "CQ W1AW/P FN31" << "W1AW" << true << true;
+    QTest::newRow("rr73") << "W9XYZ W1AW RR73" << "W1AW" << true << true;
+    QTest::newRow("rrr") << "W9XYZ W1AW RRR" << "W1AW" << true << true;
+    QTest::newRow("73") << "W9XYZ W1AW 73" << "W1AW" << true << true;
+    QTest::newRow("rr73 extension") << "W9XYZ W1AW RR73X" << "W1AW" << true << false;
+    QTest::newRow("rrr extension") << "W9XYZ W1AW RRRX" << "W1AW" << true << false;
+    QTest::newRow("73 extension") << "W9XYZ W1AW 73X" << "W1AW" << true << false;
+    QTest::newRow("rr73 suffix collision") << "W9XYZ KW1AW RR73" << "W1AW" << true << false;
+    QTest::newRow("rrr suffix collision") << "W9XYZ KW1AW RRR" << "W1AW" << true << false;
+    QTest::newRow("73 suffix collision") << "W9XYZ KW1AW 73" << "W1AW" << true << false;
+  }
+
+  void waitRequiresSelectedStation()
+  {
+    QFETCH(QString, payload);
+    QFETCH(QString, selectedCall);
+    QFETCH(bool, waitAndCall);
+    QFETCH(bool, expectedReaction);
+
+    for (bool fast : {false, true}) {
+      auto snapshot = baseSnapshot();
+      snapshot.mode = fast ? "MSK144" : "FT8";
+      snapshot.dxCall = snapshot.hisCall = selectedCall;
+      snapshot.waitFeaturesEnabled = true;
+      snapshot.waitAndCall = waitAndCall;
+      snapshot.autoSequenceChecked = true;
+      auto const plan = DecodedMessageReaction::planWaitReplyCall(
+        decode(payload, fast ? "&" : "~", "060522"), snapshot,
+        fast ? DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder
+             : DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+      QCOMPARE(hasEffect(plan, Effect::Kind::ProcessAutomaticSelectionNow), expectedReaction);
+      QCOMPARE(hasEffect(plan, Effect::Kind::SetAutoEnabled), expectedReaction);
+      if (!expectedReaction) QVERIFY(plan.effects.isEmpty());
+    }
+  }
+
+  void slowWaitReplyOrderingAndTimeout()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.waitFeaturesEnabled = true;
+    auto const plan = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    int const watchdog = effectIndex(plan, Effect::Kind::ResetWatchdog);
+    int const process = effectIndex(plan, Effect::Kind::ProcessAutomaticSelectionNow, watchdog + 1);
+    int const enableAuto = effectIndex(plan, Effect::Kind::SetAutoEnabled, process + 1);
+    int const timer = effectIndex(plan, Effect::Kind::StartWaitReplyTimer, enableAuto + 1);
+    QVERIFY(watchdog >= 0 && process > watchdog
+            && enableAuto > process && timer > enableAuto);
+    QCOMPARE(plan.effects[timer].intValue, 120000);
+  }
+
+  void waitReplyUsesExchangeToken_data()
+  {
+    QTest::addColumn<QString>("exchange");
+    QTest::addColumn<int>("frequency");
+    QTest::addColumn<bool>("trailingSpace");
+    QTest::addColumn<bool>("expectedReply");
+    QTest::newRow("report at 73 Hz") << "-10" << 73 << false << true;
+    QTest::newRow("report at 1473 Hz") << "-10" << 1473 << true << true;
+    QTest::newRow("roger report at 2373 Hz") << "R-10" << 2373 << true << true;
+    QTest::newRow("rr73") << "RR73" << 1500 << false << true;
+    QTest::newRow("padded rr73") << "RR73" << 1473 << true << true;
+    QTest::newRow("rrr") << "RRR" << 1500 << true << true;
+    QTest::newRow("final 73") << "73" << 1500 << false << false;
+    QTest::newRow("padded final 73") << "73" << 1473 << true << false;
+  }
+
+  void waitReplyUsesExchangeToken()
+  {
+    QFETCH(QString, exchange);
+    QFETCH(int, frequency);
+    QFETCH(bool, trailingSpace);
+    QFETCH(bool, expectedReply);
+    for (bool fast : {false, true}) {
+      auto snapshot = baseSnapshot();
+      snapshot.mode = fast ? "MSK144" : "FT8";
+      snapshot.waitFeaturesEnabled = true;
+      snapshot.waitAndCall = snapshot.waitAndCallControlChecked = true;
+      snapshot.autoSequenceChecked = true;
+      QString const line = decode("K1ABC W1AW " + exchange, fast ? "&" : "~", "060522", frequency).string();
+      auto const plan = DecodedMessageReaction::planWaitReplyCall(
+        DecodedText {line + (trailingSpace ? " " : "")}, snapshot,
+        fast ? DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder
+             : DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+      QCOMPARE(effectCount(plan, Effect::Kind::ProcessAutomaticSelectionNow), expectedReply ? 1 : 0);
+      QCOMPARE(effectCount(plan, Effect::Kind::SetAutoEnabled), expectedReply ? 1 : 0);
+      QCOMPARE(hasEffect(plan, Effect::Kind::StartWaitReplyTimer), expectedReply);
+      QVERIFY(!hasEffect(plan, Effect::Kind::StartWaitCallTimer));
+      QVERIFY(!hasEffect(plan, Effect::Kind::SetNoWaitAndCall));
+    }
+  }
+
+  void waitReplyRecognizesLocalBaseCall()
+  {
+    for (bool fast : {false, true}) {
+      auto snapshot = baseSnapshot();
+      snapshot.mode = fast ? "MSK144" : "FT8";
+      snapshot.myCall = "PJ4/K1ABC";
+      snapshot.waitFeaturesEnabled = true;
+      for (QString const& recipient : {QString {"K1ABC"}, QString {"<PJ4/K1ABC>"}}) {
+        auto const plan = DecodedMessageReaction::planWaitReplyCall(
+          decode(recipient + " W1AW -10", fast ? "&" : "~", "060522"), snapshot,
+          fast ? DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder
+               : DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+        QCOMPARE(effectCount(plan, Effect::Kind::SetAutoEnabled), 1);
+      }
+    }
+  }
+
+  void waitGuardsRespectSpecialOperations()
+  {
+    for (bool fast : {false, true}) {
+      for (auto specOp : {SpecialOperatingActivity::NONE, SpecialOperatingActivity::HOUND,
+                          SpecialOperatingActivity::NA_VHF}) {
+        auto snapshot = baseSnapshot();
+        snapshot.mode = fast ? "MSK144" : "FT4";
+        snapshot.specOp = specOp;
+        snapshot.ncccSprint = specOp == SpecialOperatingActivity::NA_VHF;
+        snapshot.waitFeaturesEnabled = true;
+        snapshot.waitStationIgnored = true;
+        auto const message = decode("K1ABC W1AW -10", fast ? "&" : "+", "060500");
+        auto const source = fast ? DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder
+                                 : DecodedMessageReaction::WaitDecodeSource::SlowDecoder;
+        auto const ignored = DecodedMessageReaction::planWaitReplyCall(message, snapshot, source);
+        QCOMPARE(hasEffect(ignored, Effect::Kind::SetAutoEnabled), specOp != SpecialOperatingActivity::NONE);
+        snapshot.tuning = true;
+        QVERIFY(DecodedMessageReaction::planWaitReplyCall(message, snapshot, source).effects.isEmpty());
+      }
+    }
+  }
+
+  void ncccFinal73DoesNotRearm()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "FT4";
+    snapshot.specOp = SpecialOperatingActivity::NA_VHF;
+    snapshot.ncccSprint = true;
+    auto const plan = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW 73", "+"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    QVERIFY(plan.effects.isEmpty());
+  }
+
+  void waitCallDoesNotActivateWhileIgnoredOrTuning()
+  {
+    for (bool fast : {false, true}) {
+      auto snapshot = baseSnapshot();
+      snapshot.mode = fast ? "MSK144" : "FT8";
+      snapshot.waitFeaturesEnabled = true;
+      snapshot.waitAndCall = snapshot.autoSequenceChecked = true;
+      auto const message = decode("CQ EU W1AW FN31", fast ? "&" : "~", "060522");
+      auto const source = fast ? DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder
+                               : DecodedMessageReaction::WaitDecodeSource::SlowDecoder;
+      snapshot.waitStationIgnored = true;
+      QVERIFY(DecodedMessageReaction::planWaitReplyCall(message, snapshot, source).effects.isEmpty());
+      snapshot.waitStationIgnored = false;
+      snapshot.tuning = true;
+      QVERIFY(DecodedMessageReaction::planWaitReplyCall(message, snapshot, source).effects.isEmpty());
+      snapshot.tuning = false;
+      QVERIFY(hasEffect(DecodedMessageReaction::planWaitReplyCall(message, snapshot, source),
+                        Effect::Kind::StartWaitCallTimer));
+    }
+  }
+
+  void waitSelectionStartsTheRequestedExchange_data()
+  {
+    QTest::addColumn<QString>("payload");
+    QTest::addColumn<bool>("waitAndCall");
+    QTest::addColumn<int>("txMessage");
+    QTest::addColumn<int>("progress");
+    QTest::newRow("reply") << "K1ABC W1AW -10" << false << 3 << int(QsoProgress::RogerReport);
+    QTest::newRow("call") << "CQ W1AW FN31" << true << 1 << int(QsoProgress::Replying);
+  }
+
+  void waitSelectionStartsTheRequestedExchange()
+  {
+    QFETCH(QString, payload);
+    QFETCH(bool, waitAndCall);
+    QFETCH(int, txMessage);
+    QFETCH(int, progress);
+    auto snapshot = baseSnapshot();
+    snapshot.waitFeaturesEnabled = true;
+    snapshot.waitAndCall = waitAndCall;
+    snapshot.autoSequenceChecked = snapshot.autoSequenceEnabled = true;
+    auto const message = decode(payload);
+    QVERIFY(message.isStandardMessage());
+    auto const waitPlan = DecodedMessageReaction::planWaitReplyCall(
+      message, snapshot, DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    QVERIFY(hasEffect(waitPlan, Effect::Kind::ProcessAutomaticSelectionNow));
+
+    snapshot.selectionOrigin = DecodedMessageReaction::SelectionOrigin::AutomaticSelection;
+    snapshot.doubleClicked = true;
+    auto const reaction = DecodedMessageReaction::planProcessMessage(message, snapshot);
+    auto const result = finalState(reaction, snapshot);
+    QCOMPARE(result.txMessage, txMessage);
+    QCOMPARE(int(result.progress), progress);
+    QVERIFY(!hasEffect(reaction, Effect::Kind::DisarmAutoRespondSelection));
+    QVERIFY(!hasEffect(reaction, Effect::Kind::SetDxCall));
+  }
+
+  void slowHoundWrongSlotIgnoresDecode()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.specOp = SpecialOperatingActivity::HOUND;
+    snapshot.waitFeaturesEnabled = true;
+    auto const plan = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10", "~", "060515"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::IgnoreDecode);
+  }
+
+  void msk144WaitPolicies()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "MSK144";
+    snapshot.waitFeaturesEnabled = true;
+    auto reply = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10", "&", "060522"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder);
+    QCOMPARE(intEffect(reply, Effect::Kind::StartWaitReplyTimer), 180000);
+
+    snapshot.specOp = SpecialOperatingActivity::HOUND;
+    auto houndReply = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10", "&", "060515"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder);
+    QCOMPARE(houndReply.disposition, DecodedMessageReaction::ReactionDisposition::Reacted);
+    snapshot.specOp = SpecialOperatingActivity::NONE;
+
+    snapshot.fullDuplexEnabled = true;
+    snapshot.txing = true;
+    auto blocked = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10", "&", "060522"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder);
+    QVERIFY(effectIndex(blocked, Effect::Kind::ProcessAutomaticSelectionNow) < 0);
+
+    snapshot.fullDuplexEnabled = false;
+    snapshot.txing = false;
+    snapshot.waitAndCall = true;
+    snapshot.waitAndCallControlChecked = true;
+    snapshot.autoSequenceChecked = true;
+    auto directReply = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10", "&", "060522"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder);
+    QVERIFY(!hasEffect(directReply, Effect::Kind::StopWaitCallTimer));
+    QVERIFY(!hasEffect(directReply, Effect::Kind::DisableWaitAndCallControl));
+    QVERIFY(!hasEffect(directReply, Effect::Kind::StartWaitCallTimer));
+  }
+
+  void msk144WaitPolicyRequiresFastDecoderSource()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "MSK144";
+    snapshot.waitFeaturesEnabled = true;
+    snapshot.waitAndCall = true;
+    snapshot.waitAndCallControlChecked = true;
+    snapshot.autoSequenceChecked = true;
+    auto const message = decode("K1ABC W1AW -10", "&", "060522");
+
+    auto const slowPlan = DecodedMessageReaction::planWaitReplyCall(
+      message, snapshot, DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    QCOMPARE(slowPlan.disposition, DecodedMessageReaction::ReactionDisposition::NoReaction);
+    QVERIFY(!hasEffect(slowPlan, Effect::Kind::StopWaitCallTimer));
+    QVERIFY(!hasEffect(slowPlan, Effect::Kind::DisableWaitAndCallControl));
+    QVERIFY(!hasEffect(slowPlan, Effect::Kind::ProcessAutomaticSelectionNow));
+    QVERIFY(!hasEffect(slowPlan, Effect::Kind::SetAutoEnabled));
+    QVERIFY(!hasEffect(slowPlan, Effect::Kind::StartWaitReplyTimer));
+    QVERIFY(!hasEffect(slowPlan, Effect::Kind::StartWaitCallTimer));
+
+    auto const fastPlan = DecodedMessageReaction::planWaitReplyCall(
+      message, snapshot, DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder);
+    QVERIFY(!hasEffect(fastPlan, Effect::Kind::StopWaitCallTimer));
+    QVERIFY(!hasEffect(fastPlan, Effect::Kind::DisableWaitAndCallControl));
+    QVERIFY(hasEffect(fastPlan, Effect::Kind::ProcessAutomaticSelectionNow));
+    QVERIFY(hasEffect(fastPlan, Effect::Kind::SetAutoEnabled));
+    QCOMPARE(intEffect(fastPlan, Effect::Kind::StartWaitReplyTimer), 180000);
+    QVERIFY(!hasEffect(fastPlan, Effect::Kind::StartWaitCallTimer));
+  }
+
+  void nonDirectWaitAndCallBlocksOnlySlowRightDisplay()
+  {
+    auto slowSnapshot = baseSnapshot();
+    slowSnapshot.waitFeaturesEnabled = true;
+    slowSnapshot.waitAndCall = true;
+    slowSnapshot.autoSequenceChecked = true;
+    auto const slowPlan = DecodedMessageReaction::planWaitReplyCall(
+      decode("CQ W1AW FN31"), slowSnapshot,
+      DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    QVERIFY(hasEffect(slowPlan, Effect::Kind::SetBlockRightDisplay));
+
+    auto fastSnapshot = slowSnapshot;
+    fastSnapshot.mode = "MSK144";
+    auto const fastPlan = DecodedMessageReaction::planWaitReplyCall(
+      decode("CQ W1AW FN31", "&", "060522"), fastSnapshot,
+      DecodedMessageReaction::WaitDecodeSource::Msk144FastDecoder);
+    QVERIFY(hasEffect(fastPlan, Effect::Kind::ProcessAutomaticSelectionNow));
+    QVERIFY(!hasEffect(fastPlan, Effect::Kind::SetBlockRightDisplay));
+    QCOMPARE(intEffect(fastPlan, Effect::Kind::StartWaitCallTimer), 93000);
+  }
+
+  void ncccSprintAvoidsDuplicateLogging()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "FT4";
+    snapshot.specOp = SpecialOperatingActivity::NA_VHF;
+    snapshot.ncccSprint = true;
+    snapshot.loggingEnabled = true;
+    auto const plan = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW R FN31", "+"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    QCOMPARE(effectCount(plan, Effect::Kind::RequestLogQso), 1);
+    QCOMPARE(effectCount(plan, Effect::Kind::RequestLogQsoUnlessSuppressed), 1);
+    QCOMPARE(intEffect(plan, Effect::Kind::ScheduleStopTx), 500);
+    QVERIFY(effectIndex(plan, Effect::Kind::ProcessAutomaticSelectionNow) >= 0);
+  }
+
+  void ncccReplyDefersLoggingSuppressionCheck()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.mode = "FT4";
+    snapshot.specOp = SpecialOperatingActivity::NA_VHF;
+    snapshot.ncccSprint = true;
+    snapshot.loggingEnabled = true;
+    auto const plan = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10", "+"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+
+    QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::Reacted);
+    QCOMPARE(effectCount(plan, Effect::Kind::RequestLogQso), 0);
+    QCOMPARE(effectCount(plan, Effect::Kind::RequestLogQsoUnlessSuppressed), 1);
+    QVERIFY(effectIndex(plan, Effect::Kind::ProcessAutomaticSelectionNow)
+            < effectIndex(plan, Effect::Kind::RequestLogQsoUnlessSuppressed));
+
+    snapshot.loggingEnabled = false;
+    auto const loggingDisabled = DecodedMessageReaction::planWaitReplyCall(
+      decode("K1ABC W1AW -10", "+"), snapshot,
+      DecodedMessageReaction::WaitDecodeSource::SlowDecoder);
+    QCOMPARE(effectCount(loggingDisabled, Effect::Kind::RequestLogQsoUnlessSuppressed), 1);
+  }
+
+  void representativeProcessEffectOrdering()
+  {
+    auto snapshot = baseSnapshot();
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.loggingEnabled = true;
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW 73"), snapshot);
+    int const log = effectIndex(plan, Effect::Kind::RequestLogQso);
+    int const select = effectIndex(plan, Effect::Kind::SetTxMessageIndex, log + 1);
+    int const check = effectIndex(plan, Effect::Kind::CheckTxMessage, select + 1);
+    int const progress = effectIndex(plan, Effect::Kind::SetQsoProgress, check + 1);
+    int const lookup = effectIndex(plan, Effect::Kind::Lookup, progress + 1);
+    int const generate = effectIndex(plan, Effect::Kind::GenerateStandardMessages, lookup + 1);
+    QVERIFY(log >= 0 && select > log && check > select && progress > check
+            && lookup > progress && generate > lookup);
+  }
+
+  void qsoPaneRefreshFollowsSelectionOrigin_data()
+  {
+    QTest::addColumn<int>("origin");
+    QTest::addColumn<bool>("expectedRefresh");
+
+    using Origin = DecodedMessageReaction::SelectionOrigin;
+    QTest::newRow("automatic") << int(Origin::None) << true;
+    QTest::newRow("manual-left-pane") << int(Origin::ManualLeftPane) << true;
+    QTest::newRow("manual-right-pane") << int(Origin::ManualRightPane) << false;
+    QTest::newRow("synthetic") << int(Origin::Synthetic) << true;
+    QTest::newRow("udp") << int(Origin::Udp) << true;
+  }
+
+  void qsoPaneRefreshFollowsSelectionOrigin()
+  {
+    QFETCH(int, origin);
+    QFETCH(bool, expectedRefresh);
+
+    auto snapshot = baseSnapshot();
+    snapshot.qsoProgress = QsoProgress::Rogers;
+    snapshot.loggingEnabled = true;
+    snapshot.selectionOrigin = static_cast<DecodedMessageReaction::SelectionOrigin>(origin);
+
+    auto const plan = DecodedMessageReaction::planProcessMessage(
+      decode("K1ABC W1AW 73"), snapshot);
+
+    QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::Reacted);
+    QCOMPARE(finalState(plan, snapshot).progress, QsoProgress::Signoff);
+    QCOMPARE(effectCount(plan, Effect::Kind::RequestLogQso), 1);
+    QCOMPARE(effectCount(plan, Effect::Kind::GenerateStandardMessages), 1);
+    QCOMPARE(effectCount(plan, Effect::Kind::RefreshQsoPaneIfChanged),
+             expectedRefresh ? 1 : 0);
+  }
+
+  void earlyTxDecodeEffectsPrecedeRejection()
+  {
+    auto snapshot = baseSnapshot();
+    DecodedText message {"0605  Tx      1259 #  CQ K1ABC FN42"};
+    auto const plan = DecodedMessageReaction::planProcessMessage(message, snapshot);
+    QCOMPARE(plan.disposition, DecodedMessageReaction::ReactionDisposition::NoReaction);
+    QCOMPARE(plan.effects.size(), 1);
+    QCOMPARE(plan.effects.first().kind, Effect::Kind::SetRxFrequency);
+  }
+};
+
+QTEST_MAIN(TestQsoReaction)
+#include "test_qso_reaction.moc"

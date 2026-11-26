@@ -1,0 +1,378 @@
+#include <QtTest>
+
+#include <type_traits>
+
+#include "Audio/TxPlaybackDiagnostics.hpp"
+
+namespace
+{
+  TxEvidence::TxRawPlayoutSnapshot deviceClockStart (
+    qint64 sequence, TxEvidence::TxPlaybackContext context)
+  {
+    TxEvidence::TxRawPlayoutSnapshot raw;
+    raw.context = context;
+    raw.tier = TxEvidence::TxPlayoutTier::DeviceClock;
+    raw.backend_start_sequence = sequence;
+    raw.start_event = true;
+    raw.available = true;
+    raw.state = TxEvidence::TxBackendState::Active;
+    raw.sample_rate_hz = 12000;
+    raw.processed_usecs = 250000;
+    raw.successfully_written_frames = 3000;
+    raw.report_interval_ms = 25;
+    return raw;
+  }
+}
+
+class TestTxPlaybackDiagnostics : public QObject
+{
+  Q_OBJECT
+
+private:
+  Q_SLOT void identities_are_trivial_and_strong ()
+  {
+    static_assert (std::is_trivially_copyable<TxEvidence::TxSessionId>::value,
+                   "session identities must remain trivially copyable");
+    static_assert (std::is_trivially_copyable<TxEvidence::TxGeneration>::value,
+                   "generation identities must remain trivially copyable");
+    static_assert (!std::is_convertible<qint64, TxEvidence::TxSessionId>::value,
+                   "session identity conversion must be explicit");
+    QCOMPARE (TxEvidence::TxSessionId {}.value (), qint64 (0));
+    QCOMPARE (TxEvidence::TxSessionId::invalid (), TxEvidence::TxSessionId {});
+    QCOMPARE (TxEvidence::TxGeneration::invalid (), TxEvidence::TxGeneration {});
+    QVERIFY (!TxEvidence::TxGeneration {}.isValid ());
+    QVERIFY (TxEvidence::TxSessionId {4} < TxEvidence::TxSessionId {5});
+    QVERIFY (TxEvidence::TxGeneration {4} < TxEvidence::TxGeneration {5});
+    QVERIFY (qMetaTypeId<TxEvidence::TxSessionId> () != QMetaType::UnknownType);
+    QVERIFY (qMetaTypeId<TxEvidence::TxGeneration> () != QMetaType::UnknownType);
+    auto const generation1 = TxEvidence::TxPlaybackDiagnostics::allocateGeneration ();
+    auto const generation2 = TxEvidence::TxPlaybackDiagnostics::allocateGeneration ();
+    QVERIFY (generation1 < generation2);
+  }
+
+  Q_SLOT void preserves_every_stop_reason_and_tail ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    TxEvidence::TxStopReason const reasons[] = {
+      TxEvidence::TxStopReason::NormalEnd,
+      TxEvidence::TxStopReason::UserHalt,
+      TxEvidence::TxStopReason::Watchdog,
+      TxEvidence::TxStopReason::Error,
+      TxEvidence::TxStopReason::ModeChange
+    };
+    for (int index = 0; index != 5; ++index)
+      {
+        auto const session = recorder.beginSession ("FT8", 12000);
+        auto const generation = recorder.beginGeneration (session);
+        QVERIFY (generation.isValid ());
+        auto const decision = recorder.stop (session, generation, reasons[index], index + 1);
+        QCOMPARE (decision.reason, reasons[index]);
+        QCOMPARE (decision.tail_ms, index + 1);
+      }
+    QCOMPARE (recorder.terminalSessions ().size (), 5);
+  }
+
+  Q_SLOT void constructs_bounded_commit_extents ()
+  {
+    QCOMPARE (TxEvidence::boundedCommittedEndSample (0, 0, 47999), qint64 (47999));
+    QCOMPARE (TxEvidence::boundedCommittedEndSample (4800, 0, 47999), qint64 (52799));
+    QCOMPARE (TxEvidence::boundedCommittedEndSample (0, 12000, 47999), qint64 (35999));
+    QCOMPARE (TxEvidence::boundedCommittedEndSample (0, 48000, 47999), qint64 (-1));
+    QCOMPARE (TxEvidence::interleavedFrameCount (2000, 2), qint64 (1000));
+    QCOMPARE (TxEvidence::interleavedFrameCount (1999, 2), qint64 (-1));
+  }
+
+  Q_SLOT void rejects_invalid_session_start ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    QCOMPARE (recorder.beginSession ("FT8", 0), TxEvidence::TxSessionId::invalid ());
+  }
+
+  Q_SLOT void maps_legacy_tails_for_every_stop_reason ()
+  {
+    TxEvidence::TxStopReason const reasons[] = {
+      TxEvidence::TxStopReason::NormalEnd,
+      TxEvidence::TxStopReason::UserHalt,
+      TxEvidence::TxStopReason::Watchdog,
+      TxEvidence::TxStopReason::Error,
+      TxEvidence::TxStopReason::ModeChange
+    };
+    for (auto reason : reasons)
+      {
+        QCOMPARE (TxEvidence::TxPlaybackDiagnostics::decisionFor (reason, false).tail_ms, 200);
+        QCOMPARE (TxEvidence::TxPlaybackDiagnostics::decisionFor (reason, true).tail_ms, 0);
+      }
+  }
+
+  Q_SLOT void captures_lifecycle_and_growing_target ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    auto const session = recorder.beginSession ("JTTY", 12000, 100, true);
+    auto const generation = recorder.beginGeneration (session);
+    QVERIFY (recorder.commitTarget (session, generation, 300));
+    QVERIFY (!recorder.commitTarget (session, generation, 299));
+    QVERIFY (recorder.observe (deviceClockStart (7, {session, generation})));
+    QVERIFY (recorder.observeSourceProgress (session, generation, 250, 301,
+                                             "JTTY FIFO progress"));
+    QVERIFY (!recorder.observeSourceProgress (session, generation, 249, 301));
+    recorder.stop (session, generation, TxEvidence::TxStopReason::NormalEnd, 42);
+    auto later = deviceClockStart (7, {session, generation});
+    later.start_event = false;
+    later.processed_usecs = 300000;
+    QVERIFY (recorder.observe (later));
+
+    auto terminal = recorder.terminalSessions ().last ();
+    QCOMPARE (terminal.committed_end_sample, qint64 (300));
+    QCOMPARE (terminal.consumed_samples, qint64 (3600));
+    QCOMPARE (terminal.source_served_samples, qint64 (250));
+    QCOMPARE (terminal.stop.tail_ms, 42);
+    QVERIFY (terminal.terminal_playout_observed);
+    QVERIFY (terminal.diagnostic.contains ("JTTY FIFO progress"));
+
+    QVERIFY (recorder.commitTarget (session, generation, 400, true,
+                                    "Final JTTY source commitment"));
+    terminal = recorder.terminalSessions ().last ();
+    QCOMPARE (terminal.committed_end_sample, qint64 (400));
+    QVERIFY (terminal.diagnostic.contains ("Final JTTY source commitment"));
+    QVERIFY (terminal.diagnostic.contains ("JTTY FIFO progress"));
+    QVERIFY (recorder.diagnosticDump ().contains ("Final JTTY source commitment"));
+  }
+
+  Q_SLOT void normalizes_evidence_tiers_and_underrun ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    auto const session = recorder.beginSession ("FT4", 12000, 7999, true);
+    auto const generation = recorder.beginGeneration (session);
+
+    auto raw = deviceClockStart (10, {session, generation});
+    raw.processed_usecs = 500000;
+    raw.source_served_frames = 5000;
+    raw.error = TxEvidence::TxBackendError::Underrun;
+    QVERIFY (recorder.observe (raw));
+    raw.start_event = false;
+    raw.processed_usecs = 600000;
+    raw.error = TxEvidence::TxBackendError::None;
+    QVERIFY (recorder.observe (raw));
+    recorder.stop (session, generation, TxEvidence::TxStopReason::Error);
+    auto terminal = recorder.terminalSessions ().last ();
+    QCOMPARE (terminal.consumed_samples, qint64 (7200));
+    QVERIFY (terminal.underrun);
+    QVERIFY (terminal.truncated_known);
+    QVERIFY (terminal.truncated);
+    QVERIFY (recorder.diagnosticDump ().contains ("underrun=true"));
+
+    auto const deadSession = recorder.beginSession ("FT8", 12000);
+    auto const deadGeneration = recorder.beginGeneration (deadSession);
+    raw = deviceClockStart (11, {deadSession, deadGeneration});
+    raw.tier = TxEvidence::TxPlayoutTier::DeadReckoning;
+    raw.successfully_written_frames = 123;
+    QVERIFY (recorder.observe (raw));
+    recorder.stop (deadSession, deadGeneration, TxEvidence::TxStopReason::NormalEnd);
+    QCOMPARE (recorder.terminalSessions ().last ().consumed_samples, qint64 (123));
+
+    auto const unavailableSession = recorder.beginSession ("FT8", 12000);
+    auto const unavailableGeneration = recorder.beginGeneration (unavailableSession);
+    raw = deviceClockStart (12, {unavailableSession, unavailableGeneration});
+    raw.tier = TxEvidence::TxPlayoutTier::Unavailable;
+    QVERIFY (recorder.observe (raw));
+    recorder.stop (unavailableSession, unavailableGeneration,
+                   TxEvidence::TxStopReason::NormalEnd);
+    QCOMPARE (recorder.terminalSessions ().last ().consumed_samples, qint64 (-1));
+    QVERIFY (!recorder.terminalSessions ().last ().terminal_playout_observed);
+  }
+
+  Q_SLOT void unavailable_start_is_retained_and_obvious_data ()
+  {
+    QTest::addColumn<int> ("state");
+    QTest::addColumn<QString> ("diagnostic");
+    QTest::newRow ("unconfigured-device")
+      << static_cast<int> (TxEvidence::TxBackendState::Unavailable)
+      << QStringLiteral ("No audio output device configured");
+    QTest::newRow ("failed-backend-start")
+      << static_cast<int> (TxEvidence::TxBackendState::Stopped)
+      << QStringLiteral ("Audio output backend failed to start");
+  }
+
+  Q_SLOT void unavailable_start_is_retained_and_obvious ()
+  {
+    QFETCH (int, state);
+    QFETCH (QString, diagnostic);
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    auto const session = recorder.beginSession ("FT8", 48000, 47999, true);
+    auto const generation = recorder.beginGeneration (session);
+    TxEvidence::TxRawPlayoutSnapshot raw;
+    raw.context = {session, generation};
+    raw.start_event = true;
+    raw.backend_start_sequence = 20;
+    raw.tier = TxEvidence::TxPlayoutTier::Unavailable;
+    raw.state = static_cast<TxEvidence::TxBackendState> (state);
+    raw.error = TxEvidence::TxBackendError::Open;
+    raw.diagnostic = diagnostic;
+    QVERIFY (recorder.observe (raw));
+    recorder.stop (session, generation, TxEvidence::TxStopReason::Error, 200);
+    auto const terminal = recorder.terminalSessions ().last ();
+    QCOMPARE (terminal.session_id, session);
+    QCOMPARE (terminal.generation, generation);
+    QCOMPARE (terminal.backend_start_sequence, qint64 (20));
+    QCOMPARE (terminal.tier, TxEvidence::TxPlayoutTier::Unavailable);
+    QCOMPARE (terminal.consumed_samples, qint64 (-1));
+    QCOMPARE (terminal.uncertainty_samples, qint64 (-1));
+    QVERIFY (!terminal.truncated_known);
+    QVERIFY (!terminal.terminal_playout_observed);
+    QVERIFY (terminal.diagnostic.contains (diagnostic));
+    QVERIFY (recorder.diagnosticDump ().contains ("tier=unavailable"));
+  }
+
+  Q_SLOT void weaker_snapshot_does_not_replace_device_clock_evidence_data ()
+  {
+    QTest::addColumn<int> ("state");
+    QTest::newRow ("removed-stream")
+      << static_cast<int> (TxEvidence::TxBackendState::Unavailable);
+    QTest::newRow ("stopped-stream")
+      << static_cast<int> (TxEvidence::TxBackendState::Stopped);
+  }
+
+  Q_SLOT void weaker_snapshot_does_not_replace_device_clock_evidence ()
+  {
+    QFETCH (int, state);
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    auto const session = recorder.beginSession ("JTTY", 12000, 2999, true);
+    auto const generation = recorder.beginGeneration (session);
+    auto raw = deviceClockStart (21, {session, generation});
+    QVERIFY (recorder.observe (raw));
+    recorder.stop (session, generation, TxEvidence::TxStopReason::NormalEnd);
+
+    TxEvidence::TxRawPlayoutSnapshot unavailable;
+    unavailable.context = {session, generation};
+    unavailable.backend_start_sequence = 21;
+    unavailable.state = static_cast<TxEvidence::TxBackendState> (state);
+    unavailable.diagnostic = "Audio output cleanup has no playback metrics";
+    QVERIFY (!recorder.observe (unavailable));
+
+    auto const terminal = recorder.terminalSessions ().last ();
+    QCOMPARE (terminal.backend_start_sequence, qint64 (21));
+    QCOMPARE (terminal.tier, TxEvidence::TxPlayoutTier::DeviceClock);
+    QCOMPARE (terminal.consumed_samples, qint64 (3000));
+    QVERIFY (terminal.terminal_playout_observed);
+    QVERIFY (!terminal.diagnostic.contains (unavailable.diagnostic));
+  }
+
+  Q_SLOT void rejects_stale_and_regressing_events ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    auto const session = recorder.beginSession ("FT8", 12000);
+    auto const generation = recorder.beginGeneration (session);
+    auto raw = deviceClockStart (17, {session, generation});
+    QVERIFY (recorder.observe (raw));
+    QVERIFY (!recorder.observe (raw));
+    raw.context.generation = TxEvidence::TxGeneration {generation.value () - 1};
+    QVERIFY (!recorder.observe (raw));
+    raw.context.generation = generation;
+    raw.start_event = false;
+    raw.backend_start_sequence = 18;
+    QVERIFY (!recorder.observe (raw));
+    raw.backend_start_sequence = 17;
+    raw.processed_usecs = 1;
+    QVERIFY (!recorder.observe (raw));
+
+    recorder.stop (session, generation, TxEvidence::TxStopReason::NormalEnd);
+    raw.processed_usecs = 750000;
+    QVERIFY (recorder.observe (raw));
+    QCOMPARE (recorder.terminalSessions ().last ().consumed_samples, qint64 (9000));
+  }
+
+  Q_SLOT void delayed_evidence_retains_its_session_with_equal_backend_sequences ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    auto const sessionA = recorder.beginSession ("FT8", 12000);
+    auto const generationA = recorder.beginGeneration (sessionA);
+    auto delayedA = deviceClockStart (1, {sessionA, generationA});
+    recorder.stop (sessionA, generationA, TxEvidence::TxStopReason::UserHalt);
+
+    auto const sessionB = recorder.beginSession ("FT8", 12000);
+    auto const generationB = recorder.beginGeneration (sessionB);
+    auto currentB = deviceClockStart (1, {sessionB, generationB});
+    currentB.processed_usecs = 100000;
+    currentB.successfully_written_frames = 1200;
+    currentB.source_served_frames = 1200;
+    currentB.source_total_frames = 2400;
+    QVERIFY (recorder.observe (currentB));
+    QVERIFY (recorder.observe (delayedA));
+
+    delayedA.start_event = false;
+    delayedA.processed_usecs = 500000;
+    delayedA.successfully_written_frames = 6000;
+    delayedA.source_served_frames = 6000;
+    delayedA.source_total_frames = 7200;
+    QVERIFY (recorder.observe (delayedA));
+    currentB.start_event = false;
+    currentB.processed_usecs = 150000;
+    currentB.successfully_written_frames = 1800;
+    currentB.source_served_frames = 1800;
+    QVERIFY (recorder.observe (currentB));
+    recorder.stop (sessionB, generationB, TxEvidence::TxStopReason::NormalEnd);
+
+    auto terminals = recorder.terminalSessions ();
+    QCOMPARE (terminals.size (), 2);
+    QCOMPARE (terminals.at (0).session_id, sessionA);
+    QCOMPARE (terminals.at (0).consumed_samples, qint64 {6000});
+    QCOMPARE (terminals.at (0).source_served_samples, qint64 {6000});
+    QCOMPARE (terminals.at (0).stop.reason, TxEvidence::TxStopReason::UserHalt);
+    QCOMPARE (terminals.at (1).session_id, sessionB);
+    QCOMPARE (terminals.at (1).consumed_samples, qint64 {1800});
+    QCOMPARE (terminals.at (1).source_served_samples, qint64 {1800});
+
+    delayedA.state = TxEvidence::TxBackendState::Idle;
+    delayedA.processed_usecs = 600000;
+    delayedA.successfully_written_frames = 7200;
+    delayedA.source_served_frames = 7200;
+    QVERIFY (recorder.observe (delayedA));
+    terminals = recorder.terminalSessions ();
+    QCOMPARE (terminals.at (0).consumed_samples, qint64 {7200});
+    QCOMPARE (terminals.at (0).source_served_samples, qint64 {7200});
+    QVERIFY (terminals.at (0).terminal_playout_observed);
+    QCOMPARE (terminals.at (1).consumed_samples, qint64 {1800});
+    QCOMPARE (terminals.at (1).source_served_samples, qint64 {1800});
+  }
+
+  Q_SLOT void invalid_or_mismatched_context_cannot_bind_playback ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    auto const session = recorder.beginSession ("FT8", 12000);
+    auto const generation = recorder.beginGeneration (session);
+    auto raw = deviceClockStart (1, {});
+    QVERIFY (!recorder.observe (raw));
+    raw.context = {session, {}};
+    QVERIFY (!recorder.observe (raw));
+    raw.context = {{}, generation};
+    QVERIFY (!recorder.observe (raw));
+
+    auto const otherSession = recorder.beginSession ("FT8", 12000);
+    auto const otherGeneration = recorder.beginGeneration (otherSession);
+    raw.context = {session, otherGeneration};
+    QVERIFY (!recorder.observe (raw));
+    raw.context = {otherSession, generation};
+    QVERIFY (!recorder.observe (raw));
+    raw.context = {session, generation};
+    QVERIFY (recorder.observe (raw));
+  }
+
+  Q_SLOT void retains_the_last_sixteen_terminal_sessions ()
+  {
+    TxEvidence::TxPlaybackDiagnostics recorder;
+    for (int index = 0; index != 20; ++index)
+      {
+        auto const session = recorder.beginSession ("FT8", 12000);
+        auto const generation = recorder.beginGeneration (session);
+        recorder.stop (session, generation, TxEvidence::TxStopReason::NormalEnd);
+      }
+    auto const terminals = recorder.terminalSessions ();
+    QCOMPARE (terminals.size (), 16);
+    QVERIFY (terminals.first ().session_id.value () < terminals.last ().session_id.value ());
+    QVERIFY (recorder.diagnosticDump ().contains ("terminal"));
+  }
+};
+
+QTEST_GUILESS_MAIN (TestTxPlaybackDiagnostics)
+
+#include "test_tx_playback_diagnostics.moc"

@@ -1,0 +1,76 @@
+// -*- Mode: C++ -*-
+#ifndef SOUNDOUT_H__
+#define SOUNDOUT_H__
+
+#include "Audio/AudioOutputSink.hpp"
+
+#include <QAudioOutput>
+#include <QAudioDeviceInfo>
+#include <QOperatingSystemVersion>
+
+class QIODevice;
+class QAudioDeviceInfo;
+
+// An instance of this sends audio data to a specified soundcard.
+
+class SoundOutput
+  : public AudioOutputSink
+{
+  Q_OBJECT;
+  
+public:
+  explicit SoundOutput (QObject * parent = nullptr)
+    : AudioOutputSink {parent}
+    , m_framesBuffered {0}
+    , m_volume {1.0}
+    , m_backendStartSequence {0}
+  {
+  }
+
+  qreal attenuation () const;
+
+  // Device buffer size in bytes, or 0 when no stream is active. Call only on the
+  // audio thread (this object's thread); QAudioOutput is not cross-thread safe.
+  int bufferSize () const override;
+
+public Q_SLOTS:
+  void setFormat (QAudioDeviceInfo const& device, unsigned channels,
+                  int frames_buffered = 0) override;
+  void restart (QIODevice *, TxEvidence::TxPlaybackContext,
+                qint64 period_offset_ms = -1) override;
+  void suspend () override;
+  void resume () override;
+  void reset () override;
+  void stop () override;
+  void setAttenuation (qreal) override;
+  void resetAttenuation () override;
+
+private:
+  friend class TestSoundOutput;
+
+  bool checkStream (bool startup = false);
+  bool reportStreamError (QAudio::Error, bool startup = false);
+  void logStartupFailure (char const * phase, QAudioFormat const&, QAudio::State,
+                          QAudio::Error, QString const& diagnostic = {}) const;
+  bool isCurrentStream (TxEvidence::TxPlaybackContext, qint64 sequence) const;
+  TxEvidence::TxRawPlayoutSnapshot makeRawTxPlayoutSnapshot (bool startEvent = false) const;
+  void publishRawTxPlayoutSnapshot (bool startEvent = false) const;
+  void publishUnavailableTxPlayoutSnapshot (bool startEvent, QString const& diagnostic) const;
+
+  void handleStateChanged (QAudio::State, TxEvidence::TxPlaybackContext,
+                           qint64 backendStartSequence);
+
+private:
+  QAudioDeviceInfo m_device;
+  unsigned m_channels;
+  QScopedPointer<QAudioOutput> m_stream;
+  int m_framesBuffered;
+  qreal m_volume;
+  TxEvidence::TxPlaybackContext m_context;
+  qint64 m_backendStartSequence;
+  qint64 m_startingSequence {0};
+  QAudio::Error m_startupError {QAudio::NoError};
+  QAudio::Error m_deferredStartupError {QAudio::NoError};
+};
+
+#endif

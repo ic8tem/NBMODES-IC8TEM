@@ -1,0 +1,44 @@
+# NBMODES-IC8TEM - collaudo build (IC8TEM). A push to branch "collaudo" builds the Windows x64 installer
+# with the WSJT-X 3.3 Windows pipeline (Windows 7 API floor 0x0601) and puts it in a DRAFT release,
+# visible only to the repository owner and never offered by the automatic updater.
+name: NBMODES-IC8TEM collaudo
+
+on:
+  push:
+    branches: [collaudo]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+  actions: read
+
+jobs:
+  windows:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: 1.0.0-collaudo1
+      hamlib_branch: "4.7.2"
+      artifact_retention_days: 30
+
+  draft:
+    needs: windows
+    runs-on: ubuntu-latest
+    env:
+      NBM_VERSION: 1.0.0-collaudo1
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wsjtx-1.0.0-collaudo1-windows-x86_64-installer
+          path: out
+      - name: Draft release (owner only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la out
+          for f in out/*.exe; do mv "$f" "out/NBMODES-IC8TEM-${NBM_VERSION}-windows-x64-setup.exe"; done
+          gh release delete "v${NBM_VERSION}" --repo "${{ github.repository }}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "v${NBM_VERSION}" --repo "${{ github.repository }}" --draft --prerelease \
+            --target "${{ github.sha }}" --title "NBMODES-IC8TEM ${NBM_VERSION} (collaudo)" \
+            --notes "Versione di collaudo, solo per IC8TEM. Base WSJT-X 3.3.0-beta8 (K1JT e WSJT Development Group, GPLv3). Collaudare FT8 e FT4 in HF." \
+            out/*.exe
