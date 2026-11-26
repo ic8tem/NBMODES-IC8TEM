@@ -22,7 +22,7 @@ int main (int argc, char * argv[])
   try
     {
       app.setApplicationName ("NBMODES-IC8TEM"); // IC8TEM: own name, own settings folder, UDP id
-      app.setApplicationVersion (version());
+      app.setApplicationVersion (QStringLiteral ("1.0.0")); // IC8TEM: NBMODES-IC8TEM version
 
       QCommandLineParser parser;
 //      parser.setApplicationDescription ("\n" PROJECT_DESCRIPTION);

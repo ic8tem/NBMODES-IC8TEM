@@ -107,7 +107,7 @@ QString version (bool include_patch)
 
 QString program_title (QString const& revision)
 {
-  QString id {QCoreApplication::applicationName () + "   v" + QCoreApplication::applicationVersion ()};
+  QString id {QCoreApplication::applicationName () + "   v" + QCoreApplication::applicationVersion () + " (WSJT-X 3.3.0-beta8)"};
   return id + " " + revision ;
 }
 
@@ -116,8 +116,8 @@ QString branded_program_title (QString const& revision)
   // applicationName() itself must stay plain ASCII -- it also names the jt9 shared-memory key and settings/lock/temp paths.
   QString name {QCoreApplication::applicationName ()};
   auto const instance_separator = name.indexOf (" - ");
-  name.insert (instance_separator < 0 ? name.size () : instance_separator, "™");
-  QString id {name + "   v" + QCoreApplication::applicationVersion ()};
+  (void)instance_separator; // IC8TEM: no WSJT-X trademark sign on NBMODES-IC8TEM
+  QString id {name + "   v" + QCoreApplication::applicationVersion () + " (WSJT-X 3.3.0-beta8)"};
   return id + " " + revision ;
 }
 

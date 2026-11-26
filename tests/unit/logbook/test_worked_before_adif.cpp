@@ -193,7 +193,7 @@ void TestWorkedBeforeAdif::cleanupTestCase ()
 
 void TestWorkedBeforeAdif::init ()
 {
-  for (auto const& path : {QDir {data_directory ()}.filePath ("wsjtx_log.adi"), settings_dir_.filePath ("station.adi")})
+  for (auto const& path : {QDir {data_directory ()}.filePath ("nbmodes_log.adi"), settings_dir_.filePath ("station.adi")})
     if (QFile::exists (path)) QVERIFY (QFile::remove (path));
   QVERIFY (write_data_file ("cty.dat", QByteArray {"Test Entity:5:8:NA:37:-96:-5:K\nK,W;\n"}));
   QVERIFY (configuration_->supplemental_history_files ().isEmpty ());
@@ -204,7 +204,7 @@ void TestWorkedBeforeAdif::init ()
 
 void TestWorkedBeforeAdif::jtty_round_trips_with_current_header ()
 {
-  auto const path = configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi");
+  auto const path = configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi");
   if (QFile::exists (path)) QVERIFY (QFile::remove (path));
   WorkedBefore worked_before {configuration_.get ()};
   int record_count {0};
@@ -464,7 +464,7 @@ void TestWorkedBeforeAdif::imports_records_across_layouts_and_length_errors ()
   QFETCH (QStringList, expected_calls);
 
   QVERIFY (QDir {}.mkpath (configuration_->writeable_data_dir ().absolutePath ()));
-  QFile initial_log {configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi")};
+  QFile initial_log {configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi")};
   QVERIFY (initial_log.open (QIODevice::WriteOnly | QIODevice::Truncate));
   QCOMPARE (initial_log.write (adif), static_cast<qint64> (adif.size ()));
   initial_log.close ();
@@ -603,7 +603,7 @@ void TestWorkedBeforeAdif::recovers_damaged_records ()
   QByteArray before {"<CALL:5>K1ABC<BAND:3>20M<MODE:3>FT8<EOR>\r\n"};
   QByteArray after {"<MODE:3>FT8<BAND:3>20M<CALL:5>N2AAA<EOR>"};
   auto const path = supplemental ? settings_dir_.filePath ("station.adi")
-    : configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi");
+    : configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi");
   for (bool first : {false, true})
     {
       auto contents = (first ? QByteArray {} : before) + damage + "\r\n" + after;
@@ -828,7 +828,7 @@ void TestWorkedBeforeAdif::unicode_recovery_prefers_bytes_across_read_chunks ()
 
 void TestWorkedBeforeAdif::damaged_appends_publish_recovery_status ()
 {
-  QVERIFY (write_data_file ("wsjtx_log.adi", "<CALL:5>K1ABC<BAND:3>20M<MODE:3>FT8<EOR>\n"));
+  QVERIFY (write_data_file ("nbmodes_log.adi", "<CALL:5>K1ABC<BAND:3>20M<MODE:3>FT8<EOR>\n"));
   WorkedBefore worked {configuration_.get ()};
   QSignalSpy finished {&worked, &WorkedBefore::finished_loading};
   QVERIFY (finished.count () || finished.wait (5000));
@@ -902,7 +902,7 @@ void TestWorkedBeforeAdif::reports_incomplete_sources ()
   QFETCH (bool, primary);
   QFETCH (bool, accepted);
   QFETCH (int, entries);
-  auto const primary_path = configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi");
+  auto const primary_path = configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi");
   if (QFile::exists (primary_path)) QVERIFY (QFile::remove (primary_path));
   auto const source = primary ? primary_path : settings_dir_.filePath ("station.adi");
   QFile file {source};
@@ -926,7 +926,7 @@ void TestWorkedBeforeAdif::reports_incomplete_sources ()
 
 void TestWorkedBeforeAdif::primary_rescan_recovers_records_and_preserves_live_qsos ()
 {
-  auto const primary = configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi");
+  auto const primary = configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi");
   auto write = [&] (QByteArray const& contents) {
     QFile file {primary};
     return file.open (QIODevice::WriteOnly) && file.write (contents) == contents.size ();
@@ -954,7 +954,7 @@ void TestWorkedBeforeAdif::primary_rescan_recovers_records_and_preserves_live_qs
 
 void TestWorkedBeforeAdif::comment_cannot_supply_a_missing_band ()
 {
-  QFile file {configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi")};
+  QFile file {configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi")};
   QVERIFY (file.open (QIODevice::WriteOnly));
   QByteArray const contents {"<CALL:5>K1ABC<COMMENT:10><BAND:999><MODE:3>FT8<EOR>"};
   QCOMPARE (file.write (contents), static_cast<qint64> (contents.size ()));
@@ -975,7 +975,7 @@ void TestWorkedBeforeAdif::call_worked_on_days_uses_every_qso_date ()
   // weekend 1, W4NOD without a date, K3XYZ old here and again BETWEEN the
   // weekends in the supplemental file (not a contest QSO), W5TWO in
   // weekend 2 and also before the contest (two dates on one entry).
-  QVERIFY (write_data_file ("wsjtx_log.adi", QByteArray {
+  QVERIFY (write_data_file ("nbmodes_log.adi", QByteArray {
     "<CALL:5>K1ABC<BAND:4>23cm<MODE:4>MFSK<SUBMODE:3>Q65<QSO_DATE:8>20251109<EOR>\n"
     "<CALL:5>W2UYH<BAND:4>23cm<MODE:4>MFSK<SUBMODE:3>Q65<QSO_DATE:8>20261031<EOR>\n"
     "<CALL:5>K1ABC<BAND:4>13cm<MODE:3>FT8<QSO_DATE:8>20261101<EOR>\n"
@@ -1046,7 +1046,7 @@ void TestWorkedBeforeAdif::qmap_contest_views_from_a_history_log ()
   // The 23cm contest log from another PC, added as a history source; the
   // primary log is empty. Five QMAP decodes: VK7MO, G3LTF and K1JT never
   // worked, KA1GT worked a year before the contest, K2UYH in it.
-  QVERIFY (write_data_file ("wsjtx_log.adi", {}));
+  QVERIFY (write_data_file ("nbmodes_log.adi", {}));
   {
     QFile contest_log {settings_dir_.filePath ("station.adi")};
     QVERIFY (contest_log.open (QIODevice::WriteOnly));
@@ -1083,7 +1083,7 @@ void TestWorkedBeforeAdif::qmap_contest_views_from_a_history_log ()
 
 void TestWorkedBeforeAdif::added_qso_carries_its_date ()
 {
-  QVERIFY (write_data_file ("wsjtx_log.adi", QByteArray {
+  QVERIFY (write_data_file ("nbmodes_log.adi", QByteArray {
     "<CALL:5>K1ABC<BAND:4>23cm<MODE:4>MFSK<SUBMODE:3>Q65<GRIDSQUARE:4>FN42<QSO_DATE:8>20251109<EOR>\n"}));
   WorkedBefore worked {configuration_.get ()};
   int count {0};
@@ -1123,7 +1123,7 @@ void TestWorkedBeforeAdif::country_views_survive_loading_and_live_additions ()
 {
   using View = AD1CCty::EntityView;
   QVERIFY (write_country_views ());
-  QVERIFY (write_data_file ("wsjtx_log.adi", QByteArray {
+  QVERIFY (write_data_file ("nbmodes_log.adi", QByteArray {
     "<CALL:6>2M0BDR<BAND:3>20M<MODE:3>FT8<EOR>\n"
     "<CALL:5>Z61AA<BAND:3>40M<MODE:3>FT4<EOR>\n"}));
   WorkedBefore worked {configuration_.get ()};
@@ -1173,7 +1173,7 @@ void TestWorkedBeforeAdif::country_views_survive_loading_and_live_additions ()
 void TestWorkedBeforeAdif::logbook_changes_country_view_without_rescanning ()
 {
   QVERIFY (write_country_views ());
-  QVERIFY (write_data_file ("wsjtx_log.adi", QByteArray {
+  QVERIFY (write_data_file ("nbmodes_log.adi", QByteArray {
     "<CALL:6>2M0BDR<BAND:3>20M<MODE:3>FT8<EOR>\n"
     "<CALL:5>Z61AA<BAND:3>20M<MODE:3>FT8<EOR>\n"}));
   QSettings settings {settings_dir_.filePath ("wae-settings.ini"), QSettings::IniFormat};
@@ -1247,7 +1247,7 @@ void TestWorkedBeforeAdif::cancels_worker_without_partial_results ()
   QFETCH (QByteArray, checkpoint);
   QFETCH (int, occurrence);
   QFETCH (bool, recursive);
-  QVERIFY (write_data_file ("wsjtx_log.adi", primary));
+  QVERIFY (write_data_file ("nbmodes_log.adi", primary));
   auto const station = settings_dir_.filePath ("station.adi");
   {
     QFile file {station};
@@ -1273,7 +1273,7 @@ void TestWorkedBeforeAdif::cancels_worker_without_partial_results ()
     if (checkpoint == point && ++matching_checks == occurrence)
       stop.store (true, std::memory_order_relaxed);
   };
-  auto const result = load_sources (configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi"),
+  auto const result = load_sources (configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi"),
                                     {settings_dir_.filePath ("missing.adi"), station}, folders, &prefixes, 0, stop);
   QCOMPARE (matching_checks, occurrence);
   QCOMPARE (checks_after_stop, 0);
@@ -1286,7 +1286,7 @@ void TestWorkedBeforeAdif::cancels_worker_without_partial_results ()
   QCOMPARE (result.files_failed, 0);
   QCOMPARE (result.files_expected, 0);
   QCOMPARE (result.directory_failures, 0);
-  for (auto const& file_contents : {qMakePair (configuration_->writeable_data_dir ().filePath ("wsjtx_log.adi"), primary),
+  for (auto const& file_contents : {qMakePair (configuration_->writeable_data_dir ().filePath ("nbmodes_log.adi"), primary),
                                    qMakePair (station, supplemental)})
     {
       QFile file {file_contents.first};
@@ -1297,7 +1297,7 @@ void TestWorkedBeforeAdif::cancels_worker_without_partial_results ()
 
 void TestWorkedBeforeAdif::shutdown_during_scan_preserves_published_history ()
 {
-  QVERIFY (write_data_file ("wsjtx_log.adi", "<CALL:5>K1ABC<EOR>"));
+  QVERIFY (write_data_file ("nbmodes_log.adi", "<CALL:5>K1ABC<EOR>"));
   QSemaphore entered, release;
   std::atomic_bool blocked {false}, timed_out {false};
   ScopedHistoryCheckpoints checkpoints;
@@ -1306,7 +1306,7 @@ void TestWorkedBeforeAdif::shutdown_during_scan_preserves_published_history ()
   QString error;
   QVERIFY2 (wait_for_load (worked, count, error), qPrintable (error));
   QCOMPARE (count, 1);
-  QVERIFY (write_data_file ("wsjtx_log.adi", "<CALL:5>W1XYZ<EOR>"));
+  QVERIFY (write_data_file ("nbmodes_log.adi", "<CALL:5>W1XYZ<EOR>"));
   history_checkpoint = [&] (char const * point, std::atomic_bool const&) {
     if (!qstrcmp (point, "stop_requested")) release.release ();
     if (!qstrcmp (point, "read") && !blocked.exchange (true))
@@ -1353,7 +1353,7 @@ void TestWorkedBeforeAdif::destruction_cancels_running_scan ()
     ConcurrentScans () { pool->setMaxThreadCount (qMax (2, previous_max)); }
     ~ConcurrentScans () { pool->setMaxThreadCount (previous_max); }
   } concurrent_scans;
-  QVERIFY (write_data_file ("wsjtx_log.adi", "<CALL:5>K1ABC<EOR>"));
+  QVERIFY (write_data_file ("nbmodes_log.adi", "<CALL:5>K1ABC<EOR>"));
   QSemaphore entered, release;
   std::atomic_bool timed_out {false};
   std::atomic<int> starts {0}, files {0};
@@ -1396,7 +1396,7 @@ void TestWorkedBeforeAdif::destruction_cancels_running_scan ()
 
 void TestWorkedBeforeAdif::shutdown_discards_queued_completion ()
 {
-  QVERIFY (write_data_file ("wsjtx_log.adi", "<CALL:5>K1ABC<EOR>"));
+  QVERIFY (write_data_file ("nbmodes_log.adi", "<CALL:5>K1ABC<EOR>"));
   WorkedBefore worked {configuration_.get ()};
   QSignalSpy finished {&worked, &WorkedBefore::finished_loading};
   QSignalSpy started {&worked, &WorkedBefore::loading_started};
@@ -1421,7 +1421,7 @@ void TestWorkedBeforeAdif::shutdown_discards_queued_completion ()
 
 void TestWorkedBeforeAdif::shutdown_during_completion_prevents_restart ()
 {
-  QVERIFY (write_data_file ("wsjtx_log.adi", "<CALL:5>K1ABC<EOR>"));
+  QVERIFY (write_data_file ("nbmodes_log.adi", "<CALL:5>K1ABC<EOR>"));
   WorkedBefore worked {configuration_.get ()};
   bool quit_notified {false};
   connect (&worked, &WorkedBefore::finished_loading, &worked, [&] {
@@ -1835,7 +1835,7 @@ void TestWorkedBeforeAdif::chosen_log_location_receives_new_qsos ()
   Configuration configuration {&network_, QDir {dir.path ()}, &settings, nullptr};
   QCOMPARE (configuration.adif_log_file_path (), custom);
   QCOMPARE (configuration_->adif_log_file_path (),
-            QDir {data_directory ()}.filePath ("wsjtx_log.adi"));
+            QDir {data_directory ()}.filePath ("nbmodes_log.adi"));
 
   WorkedBefore worked_before {&configuration};
   QSignalSpy loaded {&worked_before, &WorkedBefore::finished_loading};
@@ -1843,7 +1843,7 @@ void TestWorkedBeforeAdif::chosen_log_location_receives_new_qsos ()
   QCOMPARE (worked_before.path (), custom);
   QVERIFY (add_qso (worked_before, "K1ABC"));
   QVERIFY (QFile::exists (custom));
-  QVERIFY (!QFile::exists (QDir {data_directory ()}.filePath ("wsjtx_log.adi")));
+  QVERIFY (!QFile::exists (QDir {data_directory ()}.filePath ("nbmodes_log.adi")));
   worked_before.reload ();
   QTRY_COMPARE_WITH_TIMEOUT (loaded.count (), 2, 5000);
   QVERIFY (worked_before.call_worked ("K1ABC", "FT8", "20M"));

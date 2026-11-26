@@ -1169,7 +1169,7 @@ private slots:
   {
     QTemporaryDir history;
     QVERIFY (prepareHistoryDirectory (history));
-    auto const primary = history.filePath ("wsjtx_log.adi");
+    auto const primary = history.filePath ("nbmodes_log.adi");
     auto const supplemental = history.filePath ("station.adi");
     QByteArray const primary_record {"<call:5>K1ABC<gridsquare:6>FN42aa<band:3>20m<mode:3>FT8<eor>"};
     QByteArray const supplemental_records {primary_record
@@ -1200,7 +1200,7 @@ private slots:
   {
     QTemporaryDir history;
     QVERIFY (prepareHistoryDirectory (history));
-    auto const primary = history.filePath ("wsjtx_log.adi");
+    auto const primary = history.filePath ("nbmodes_log.adi");
     auto const source = history.filePath ("station.adi");
     auto const missing = history.filePath ("unavailable.adi");
     QVERIFY (writeHistoryFile (primary, "<call:5>K1ABC<band:3>20m<mode:3>FT8<eor>"));
@@ -1359,7 +1359,7 @@ private slots:
     auto const source = nested + "/station.adi";
     QByteArray const contents {"<call:5>DL1AA<band:3>40m<mode:3>FT8<eor>"};
     QVERIFY (writeHistoryFile (source, contents));
-    QVERIFY (writeHistoryFile (history.filePath ("wsjtx_log.adi"), "<call:5>K1ABC<eor>"));
+    QVERIFY (writeHistoryFile (history.filePath ("nbmodes_log.adi"), "<call:5>K1ABC<eor>"));
     dialog ().supplemental_history_files_ = QStringList {source};
     dialog ().supplemental_history_folders_ = HistoryFolders {{history.path (), true}, {nested, false}};
     WorkedBefore worked {configuration_.get ()};
@@ -1478,7 +1478,7 @@ private slots:
     auto const root_alias = history.filePath ("export-alias");
     QVERIFY (QDir {}.mkpath (exports));
     QVERIFY (QDir {}.mkpath (outside));
-    auto const primary = history.filePath ("wsjtx_log.adi");
+    auto const primary = history.filePath ("nbmodes_log.adi");
     auto const source = exports + "/station.adi";
     QVERIFY (writeHistoryFile (primary, "<call:5>K1ABC<eor>"));
     QVERIFY (writeHistoryFile (source, "<call:5>DL1AA<eor>"));
@@ -1532,7 +1532,7 @@ private slots:
   {
     QTemporaryDir history;
     QVERIFY (prepareHistoryDirectory (history));
-    QVERIFY (writeHistoryFile (history.filePath ("wsjtx_log.adi"),
+    QVERIFY (writeHistoryFile (history.filePath ("nbmodes_log.adi"),
                               "<call:5>K1ABC<band:3>20m<mode:3>FT8<eor>"));
     QVERIFY (writeHistoryFile (history.filePath ("station.adi"),
                               "<call:5>DL1AA<band:3>40m<mode:3>FT8<eor>"));
@@ -1591,7 +1591,7 @@ private slots:
     QVERIFY (d.next_supplemental_history_files_.isEmpty ());
     QCOMPARE (changed.count (), 0);
 
-    auto const primary = writable_file_path (configuration_->writeable_data_dir (), "wsjtx_log.adi");
+    auto const primary = writable_file_path (configuration_->writeable_data_dir (), "nbmodes_log.adi");
     d.next_supplemental_history_files_ = QStringList {source, source, primary};
     d.accept ();
     QCOMPARE (configuration_->supplemental_history_files (), QStringList {source});
@@ -1607,7 +1607,7 @@ private slots:
 
   void adifLogLocationRequiresAcceptanceAndRestore ()
   {
-    auto const default_log = writable_file_path (configuration_->writeable_data_dir (), "wsjtx_log.adi");
+    auto const default_log = writable_file_path (configuration_->writeable_data_dir (), "nbmodes_log.adi");
     auto const shared_log = QDir::cleanPath (directory_.filePath ("shared/our_log.adi"));
     auto& d = dialog ();
     ui ().rig_combo_box->setCurrentText ("None");
@@ -1796,7 +1796,7 @@ private slots:
 #else
     QTemporaryDir history;
     QVERIFY (prepareHistoryDirectory (history));
-    auto const primary = history.filePath ("wsjtx_log.adi");
+    auto const primary = history.filePath ("nbmodes_log.adi");
     auto const other = history.filePath ("other.adi");
     auto const alias = history.filePath ("alias.adi");
     auto const missing = history.filePath ("missing.adi");

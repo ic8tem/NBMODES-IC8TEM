@@ -99,7 +99,7 @@ void TestEmeCabrillo::picture ()
   for (auto const& day : {"2026-08-08", "2026-08-09", "2026-09-05", "2026-09-06",
                           "2026-10-31", "2026-11-01", "2026-11-28", "2026-11-29"})
     days << QDate::fromString (day, Qt::ISODate);
-  EmeCabrilloDialog dialog {&settings, directory.filePath ("wsjtx_log.adi"), "DL3WDG", "JN68LM", days,
+  EmeCabrilloDialog dialog {&settings, directory.filePath ("nbmodes_log.adi"), "DL3WDG", "JN68LM", days,
                             directory.path ()};
   dialog.resize (qEnvironmentVariableIntValue ("EME_CABRILLO_PICTURE_WIDTH") > 0
                  ? qEnvironmentVariableIntValue ("EME_CABRILLO_PICTURE_WIDTH") : 720, 860);
@@ -389,7 +389,7 @@ void TestEmeCabrillo::save_is_safe ()
 {
   QTemporaryDir directory;
   QVERIFY (directory.isValid ());
-  auto const adif = write_file (directory, "wsjtx_log.adi", contest_log ());
+  auto const adif = write_file (directory, "nbmodes_log.adi", contest_log ());
   auto const other = write_file (directory, "other.adi", pc23_log ());
   QSettings settings {directory.filePath ("settings.ini"), QSettings::IniFormat};
   settings.setValue ("EmeCabrillo/Logs", QStringList {EmeCabrilloDialog::own_log (), other});
@@ -433,7 +433,7 @@ void TestEmeCabrillo::dialog_several_logs ()
   QVERIFY (directory.isValid ());
   auto const pc10 = write_file (directory, "pc10.adi", pc10_log ());
   auto const pc23 = write_file (directory, "pc23.adi", pc23_log ());
-  auto const own = write_file (directory, "wsjtx_log.adi", QByteArray {"<EOH>\n"}
+  auto const own = write_file (directory, "nbmodes_log.adi", QByteArray {"<EOH>\n"}
                                + record ("DL7APV", "20261101", "0900", "23cm", "JO62"));
   QSettings settings {directory.filePath ("settings.ini"), QSettings::IniFormat};
   settings.setValue ("EmeCabrillo/Logs", QStringList {pc10, pc23});
@@ -478,7 +478,7 @@ void TestEmeCabrillo::dialog_keeps_typed_grids ()
 {
   QTemporaryDir directory;
   QVERIFY (directory.isValid ());
-  auto const adif = write_file (directory, "wsjtx_log.adi", QByteArray {"<EOH>\n"}
+  auto const adif = write_file (directory, "nbmodes_log.adi", QByteArray {"<EOH>\n"}
                                 + record ("W5LUA", "20261031", "0400", "23cm", "EM13")
                                 + record ("W5LUA", "20261101", "0500", "23cm")       // really EM12
                                 + record ("G4CCH", "20261031", "0800", "23cm")
@@ -532,7 +532,7 @@ void TestEmeCabrillo::dialog_keeps_own_days ()
 {
   QTemporaryDir directory;
   QVERIFY (directory.isValid ());
-  auto const adif = write_file (directory, "wsjtx_log.adi", QByteArray {"<EOH>\n"}
+  auto const adif = write_file (directory, "nbmodes_log.adi", QByteArray {"<EOH>\n"}
                                 + record ("W5LUA", "20261031", "0400", "23cm", "EM13")
                                 + record ("G4CCH", "20261101", "0800", "23cm", "IO91")
                                 + record ("K2UYH", "20261128", "0900", "23cm", "FN20"));
@@ -563,7 +563,7 @@ void TestEmeCabrillo::buttons_stay_in_view ()
   for (int i = 0; i < 40; ++i)                                     // 40 QSOs without a grid
     log += record (QString {"DL%1ABC"}.arg (i % 10) + QChar ('A' + i / 10), "20261031",
                    QString {"%1"}.arg (100 + i, 4, 10, QChar {'0'}), "23cm");
-  auto const adif = write_file (directory, "wsjtx_log.adi", log);
+  auto const adif = write_file (directory, "nbmodes_log.adi", log);
   QSettings settings {directory.filePath ("settings.ini"), QSettings::IniFormat};
   EmeCabrilloDialog dialog {&settings, adif, "DL3WDG", "JN68LM", contest_days (), directory.path ()};
   QCOMPARE (dialog.selection ().need_grid.size (), 40);
@@ -768,7 +768,7 @@ void TestEmeCabrillo::dialog ()
 {
   QTemporaryDir directory;
   QVERIFY (directory.isValid ());
-  auto const adif = directory.filePath ("wsjtx_log.adi");
+  auto const adif = directory.filePath ("nbmodes_log.adi");
   {
     QFile file {adif};
     QVERIFY (file.open (QIODevice::WriteOnly));

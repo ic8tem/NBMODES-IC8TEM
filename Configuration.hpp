@@ -296,7 +296,7 @@ public:
   bool highlight_by_mode () const;
   bool best_sp_new_dxcc () const;
   bool best_sp_new_call_on_band () const;
-  // Full path of the ADIF log that receives new QSOs: wsjtx_log.adi in the
+  // Full path of the ADIF log that receives new QSOs: nbmodes_log.adi in the
   // data directory unless the user chose another (e.g. shared) location.
   QString adif_log_file_path () const;
   QStringList const& supplemental_history_files () const;

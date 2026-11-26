@@ -334,7 +334,7 @@ int main(int argc, char *argv[])
 
       // Override programs executable basename as application name.
       a.setApplicationName ("NBMODES-IC8TEM"); // IC8TEM: own name, own settings folder, UDP id
-      a.setApplicationVersion (version ());
+      a.setApplicationVersion (QStringLiteral ("1.0.0")); // IC8TEM: NBMODES-IC8TEM version; WSJT-X base in program_title
 
       QCommandLineParser parser;
       parser.setApplicationDescription ("\n" PROJECT_DESCRIPTION);
