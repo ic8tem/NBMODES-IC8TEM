@@ -16,7 +16,13 @@ if (APPLE OR WIN32)
     )
 
   # if a system Qt is used (e.g. installed in /usr/lib/), it will not be included in the installation
-  set (fixup_exe "\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/${CMAKE_PROJECT_NAME}${CMAKE_EXECUTABLE_SUFFIX}")
+  # NBMODES-IC8TEM: su Windows il programma si chiama nbmodes.exe (OUTPUT_NAME del target wsjtx)
+  if (APPLE)
+    set (nbm_main_exe_name ${CMAKE_PROJECT_NAME})
+  else ()
+    set (nbm_main_exe_name nbmodes)
+  endif ()
+  set (fixup_exe "\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/${nbm_main_exe_name}${CMAKE_EXECUTABLE_SUFFIX}")
   set (fixup_exes "${fixup_exe}")
   list (APPEND fixup_exes "\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/map65${CMAKE_EXECUTABLE_SUFFIX}")
 
