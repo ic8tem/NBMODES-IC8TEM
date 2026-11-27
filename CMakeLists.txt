@@ -1702,6 +1702,10 @@ if (WSJT_ENABLE_TESTS AND WSJT_ENABLE_GUI_SMOKE_TESTS
     LABELS "gui;audio;jtty;integration;accelerated"
     PROCESSORS 1
     TIMEOUT 600)
+  # NBMODES-IC8TEM: FST4, FST4W e JTTY non sono tra i modi del programma (tolti dai menu): le prove
+  # grafiche dei tre modi restano definite ma disattivate. Le prove sul codice dei decoder restano attive.
+  set_tests_properties (test_wsjtx_fst4_wav test_wsjtx_fst4w_wav ${live_test} ${loopback_test}
+    PROPERTIES DISABLED TRUE)
 
   if (WSJT_ENABLE_TSAN)
     set_tests_properties (
