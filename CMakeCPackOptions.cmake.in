@@ -5,8 +5,12 @@
 set (CPACK_PACKAGE_VENDOR "@PROJECT_VENDOR@")
 set (CPACK_PACKAGE_CONTACT "@PROJECT_CONTACT@")
 set (CPACK_RESOURCE_FILE_LICENSE "@PROJECT_SOURCE_DIR@/COPYING")
-set (CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
-set (CPACK_PACKAGE_EXECUTABLES wsjtx "@PROJECT_NAME@")
+# NBMODES-IC8TEM: nomi propri per cartella, menu Start, collegamenti e registro, cosi' non tocca
+# mai un'installazione di WSJT-X sullo stesso PC (che usa "wsjtx" per cartella, menu e collegamento).
+set (CPACK_PACKAGE_INSTALL_DIRECTORY "NBMODES-IC8TEM")
+set (CPACK_PACKAGE_INSTALL_REGISTRY_KEY "NBMODES-IC8TEM")
+set (CPACK_NSIS_PACKAGE_NAME "NBMODES-IC8TEM")
+set (CPACK_PACKAGE_EXECUTABLES wsjtx "NBMODES-IC8TEM")
 set (CPACK_CREATE_DESKTOP_LINKS wsjtx)
 set (CPACK_STRIP_FILES TRUE)
 
@@ -44,18 +48,17 @@ if (CPACK_GENERATOR MATCHES "NSIS")
   set (CPACK_PACKAGE_ICON "@PROJECT_SOURCE_DIR@/icons/windows-icons\\installer_logo.bmp")
   # tell cpack to create links to the doc files
   set (CPACK_NSIS_MENU_LINKS
-    "@PROJECT_ONLINE_MANUAL_URL@" "@PROJECT_NAME@ Documentation"
-    "@PROJECT_HOMEPAGE@" "@PROJECT_NAME@ Web Site"
+    "@PROJECT_HOMEPAGE@" "NBMODES-IC8TEM su GitHub"
     )
   # Use the icon from wsjtx for add-remove programs
   set (CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\wsjtx.exe")
 
-  set (CPACK_NSIS_DISPLAY_NAME "${CPACK_PACKAGE_DESCRIPTION_SUMMARY}")
+  set (CPACK_NSIS_DISPLAY_NAME "NBMODES-IC8TEM")
   set (CPACK_NSIS_HELP_LINK "@PROJECT_ONLINE_MANUAL_URL@")
   set (CPACK_NSIS_URL_INFO_ABOUT "@PROJECT_HOMEPAGE@")
   set (CPACK_NSIS_CONTACT "${CPACK_PACKAGE_CONTACT}")
   set (CPACK_NSIS_MUI_FINISHPAGE_RUN "wsjtx.exe")
-  set (CPACK_NSIS_MODIFY_PATH ON)
+  set (CPACK_NSIS_MODIFY_PATH OFF)   # stessi nomi di WSJT-X (wsjtx.exe, jt9.exe): niente PATH
 
   # Preserve caller-supplied definitions alongside installer version metadata.
   string (APPEND CPACK_NSIS_EXTRA_DEFINES

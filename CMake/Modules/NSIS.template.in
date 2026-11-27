@@ -659,14 +659,14 @@ Function ReportPreflightFailure
   DetailPrint "Cannot update $PreflightPath (Windows error $PreflightError). No installation files have been changed."
   IfSilent 0 report_done
   ClearErrors
-  CreateDirectory "$TEMP\WSJT-X-installer"
+  CreateDirectory "$TEMP\NBMODES-IC8TEM-installer"
   IfErrors report_done
-  GetTempFileName $0 "$TEMP\WSJT-X-installer"
+  GetTempFileName $0 "$TEMP\NBMODES-IC8TEM-installer"
   IfErrors report_done
   FileOpen $1 "$0" w
   IfErrors report_done
   System::Call 'kernel32::GetCurrentProcessId() i .r2'
-  FileWriteUTF16LE /BOM $1 "WSJT-X installer preflight failure (process $2)$\r$\nDestination: $INSTDIR$\r$\nFile: $PreflightPath$\r$\nWindows error: $PreflightError$\r$\nNo installation files have been changed.$\r$\n"
+  FileWriteUTF16LE /BOM $1 "NBMODES-IC8TEM installer preflight failure (process $2)$\r$\nDestination: $INSTDIR$\r$\nFile: $PreflightPath$\r$\nWindows error: $PreflightError$\r$\nNo installation files have been changed.$\r$\n"
   FileClose $1
   Rename "$0" "$0.log"
 report_done:
@@ -681,7 +681,7 @@ preflight_retry:
     IfSilent preflight_cancel
     ${If} $PreflightError == 32
     ${OrIf} $PreflightError == 33
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$PreflightPath$\r$\n$\r$\nSetup cannot update this file while it is in use. Close WSJT-X or other programs using this installation, then choose Retry. No installation files have been changed." IDRETRY preflight_retry
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$PreflightPath$\r$\n$\r$\nSetup cannot update this file while it is in use. Close NBMODES-IC8TEM or other programs using this installation, then choose Retry. No installation files have been changed." IDRETRY preflight_retry
     ${Else}
       MessageBox MB_RETRYCANCEL|MB_ICONSTOP "$PreflightPath$\r$\n$\r$\nSetup cannot update this file or directory (Windows error $PreflightError). Check its access permissions, then choose Retry. No installation files have been changed." IDRETRY preflight_retry
     ${EndIf}
@@ -714,7 +714,7 @@ SectionEnd
     IfErrors launch_failed
     StrCmp $0 0 launch_done
   launch_failed:
-    MessageBox MB_OK|MB_ICONINFORMATION "WSJT-X was installed, but could not be started as the desktop user. Please start it from the Start menu or your usual shortcut."
+    MessageBox MB_OK|MB_ICONINFORMATION "NBMODES-IC8TEM was installed, but could not be started as the desktop user. Please start it from the Start menu or your usual shortcut."
   launch_done:
   FunctionEnd
 !endif
