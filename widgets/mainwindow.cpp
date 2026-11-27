@@ -2,8 +2,10 @@
 #include "mainwindow.h"
 #include "NbmHostDialogs.hpp"
 #include "NbmCallLists.hpp"
+#include "NbmLazyAlloc.hpp"
 #include "NbmCall3.hpp"
 #include "NbmG7.hpp"
+#include "NbmGpu.hpp"
 #include "NbmDecodeLoad.hpp"
 #include <QPlainTextEdit>
 #include <QDialogButtonBox>
@@ -427,7 +429,7 @@ QList<FoxVerifier *> m_verifications;
 int volatile itone[MAX_NUM_SYMBOLS];   //Audio tones for all Tx symbols
 int volatile itone0[MAX_NUM_SYMBOLS];  //Dummy array, data not actually used
 int volatile icw[NUM_CW_SYMBOLS];      //Dits for CW ID
-dec_data_t& dec_data = *new dec_data_t{};
+dec_data_t& dec_data = *nbm::lazy_zero_new<dec_data_t> ();   // NBMODES-IC8TEM: pagine a zero su richiesta
 
 int outBufSize;
 int rc;
@@ -1120,6 +1122,9 @@ MainWindow::MainWindow(QDir const& temp_directory,
   ui->actionWSPR->setActionGroup(modeGroup);
   ui->actionEcho->setActionGroup(modeGroup);
   ui->actionJTTY->setActionGroup(modeGroup);
+  // NBMODES-IC8TEM: FST4, FST4W e JTTY non sono tra i modi del programma. Restano raggiungibili
+  // solo dalle prove automatiche (--test-mode), che verificano il codice comune di WSJT-X.
+  for (auto * a : {ui->actionFST4, ui->actionFST4W, ui->actionJTTY, ui->actionQSG_FST4}) a->setVisible (false);
   ui->actionMSK144->setActionGroup(modeGroup);
   ui->actionQ65->setActionGroup(modeGroup);
   ui->actionFreqCal->setActionGroup(modeGroup);
@@ -1988,6 +1993,31 @@ MainWindow::MainWindow(QDir const& temp_directory,
       connect (g7, &QAction::toggled, this, [this] (bool on) { m_settings->setValue ("NBM/G7VRD", on); m_nbmG7->setEnabled (on); });
       if (auto * m = menu_of (ui->actionErase_Ignore_List)) insert_after (m, m_nbmCall3Auto, g7);
     }
+
+    // Waterfall: GPU automatico / sempre GPU / sempre CPU (menu Visualizza)
+    {
+      auto * sub = ui->menuView->addMenu (tr ("Disegno di waterfall e spettro"));
+      auto * grp = new QActionGroup {sub};
+      QStringList const names {tr ("Automatico (GPU se adatta)"), tr ("Sempre con la GPU"), tr ("Sempre con la CPU")};
+      int const cur = int (nbm::gpuWaterfallSetting (m_settings));
+      for (int i = 0; i < names.size (); ++i)
+        {
+          auto * a = sub->addAction (names[i]);
+          a->setCheckable (true);
+          a->setChecked (i == cur);
+          grp->addAction (a);
+          connect (a, &QAction::triggered, this, [this, i] {
+              m_settings->setValue ("NBM/GpuWaterfall", i);
+              nbmApplyGpuWaterfall ();
+            });
+        }
+    }
+    QTimer::singleShot (0, this, &MainWindow::nbmApplyGpuWaterfall);
+
+    // Memoria libera sotto 500 MB: prima il waterfall alla CPU, poi meno thread FT8, poi pausa di G7VRD
+    m_nbmRamWatch = new QTimer {this};
+    connect (m_nbmRamWatch, &QTimer::timeout, this, &MainWindow::nbmRamWatchdog);
+    m_nbmRamWatch->start (10000);
 
     m_nbmDaily = new QTimer {this};
     connect (m_nbmDaily, &QTimer::timeout, this, &MainWindow::nbmDailyUpdates);
@@ -5745,7 +5775,8 @@ void MainWindow::decode (Ft8MtdDecodeCoordinator::Stage ft8Stage,
     if(m_operatingFrequency.rx () < 30000000) dec_data.params.napwid=5; // FT8AP decoding bandwidth for 'mycall hiscall ???' and RRR,RR73,73 messages
     else if(m_operatingFrequency.rx () < 100000000) dec_data.params.napwid=15;
     else dec_data.params.napwid=50;
-    dec_data.params.nmt=m_ft8threads;
+    dec_data.params.nmt = m_ft8threads ? m_ft8threads : nbm::autoFt8Threads ();   // NBMODES-IC8TEM: Auto secondo la RAM
+    if (m_nbmLowRam >= 2) dec_data.params.nmt = 1;   // RAM libera scarsa: un solo thread
     dec_data.params.ncandthin=m_ncandthin;
     dec_data.params.ndtcenter=0;  // ft8mod was 100 * ui->DTCenterSpinBox->value();
     if (m_ihsym==m_earlyDecode or m_ihsym==m_earlyDecode2) {
@@ -17673,7 +17704,7 @@ void MainWindow::set_mode_from_command_line(const QString& mode, bool lock_mode)
         on_actionFT8_triggered();
     } else if (m == "ft4") {
         on_actionFT4_triggered();
-    } else if (m == "jtty") {
+    } else if (m == "jtty" && QStandardPaths::isTestModeEnabled ()) {
         on_actionJTTY_triggered();
     } else {
         LOG_INFO("Invalid or unsupported mode specified via command line: " << mode);
@@ -17822,4 +17853,37 @@ void MainWindow::nbmObserveDecodeTime (QString const& mode, qint64 elapsedMs, do
   else msg = tr ("C'è margine (decodifica %1 s): decoder rialzato a %2").arg (secs, what);
   qInfo () << "NBM decode load level" << before << "->" << level << "elapsedMs:" << elapsedMs << "budgetMs:" << budget;
   showStatusMessage (msg);
+}
+
+// NBMODES-IC8TEM: GPU per waterfall e spettro, e riduzioni automatiche con poca RAM libera
+
+void MainWindow::nbmApplyGpuWaterfall ()
+{
+  if (!m_wideGraph) return;
+  QString why;
+  bool const want = nbm::gpuWaterfallWanted (m_settings, &why) && m_nbmLowRam < 1
+    && (!QStandardPaths::isTestModeEnabled () || qEnvironmentVariableIsSet ("NBM_TEST_GPU"));
+  m_wideGraph->setGpuRendering (want);
+  qInfo () << "NBM waterfall:" << why << "->" << (want ? "GPU" : "CPU");
+}
+
+void MainWindow::nbmRamWatchdog ()
+{
+  auto const free = nbm::availableRamMB ();
+  if (free < 0) return;
+  auto const now = QDateTime::currentMSecsSinceEpoch ();
+  int const before = m_nbmLowRam;
+  if (free < 500 && m_nbmLowRam < 3) ++m_nbmLowRam;
+  else if (free > 800 && m_nbmLowRam > 0 && now - m_nbmLowRamChanged > 60000) --m_nbmLowRam;
+  if (m_nbmLowRam == before) return;
+  m_nbmLowRamChanged = now;
+  nbmApplyGpuWaterfall ();
+  if (m_nbmG7) m_nbmG7->setEnabled (m_nbmLowRam < 3 && m_settings->value ("NBM/G7VRD", true).toBool ()
+                                   && !QStandardPaths::isTestModeEnabled ());
+  static char const * const steps[] = {
+    QT_TR_NOOP ("memoria di nuovo sufficiente: tutto come prima"),
+    QT_TR_NOOP ("waterfall disegnato dalla CPU"),
+    QT_TR_NOOP ("waterfall dalla CPU e decoder FT8 a un solo thread"),
+    QT_TR_NOOP ("waterfall dalla CPU, decoder FT8 a un solo thread, G7VRD in pausa")};
+  showStatusMessage (tr ("RAM libera %1 MB: %2").arg (free).arg (tr (steps[m_nbmLowRam])));
 }

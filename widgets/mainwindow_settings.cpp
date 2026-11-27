@@ -1,3 +1,4 @@
+#include <QStandardPaths>
 #include "mainwindow.h"
 #include "RoundRobinSelection.hpp"
 #include "ui_mainwindow.h"
@@ -328,6 +329,8 @@ void MainWindow::readSettings()
 
   m_settings->beginGroup("Common");
   m_mode=m_settings->value("Mode","FT8").toString();
+  // NBMODES-IC8TEM: FST4, FST4W e JTTY non sono tra i modi del programma
+  if (!QStandardPaths::isTestModeEnabled () && (m_mode == "FST4" || m_mode == "FST4W" || m_mode == "JTTY")) m_mode = "FT8";
   m_settings->endGroup();
 
   // do this outside of settings group because it uses groups internally

@@ -176,6 +176,7 @@ namespace DecoderIpc
   qint32 progress (shared_dec_data_t const& shared);
   qint32 protocolVersion (shared_dec_data_t const& shared);
   void initialize (shared_dec_data_t& shared);
+  void initializeFresh (shared_dec_data_t& shared);
   void shutdown (shared_dec_data_t& shared);
   bool publish (shared_dec_data_t& shared, dec_data_t const& payload,
                 bool copySamples, qint32 generation,

@@ -1296,6 +1296,11 @@ private:
   bool nbmAdaptActive () const;
   bool nbmUsesFt8Mtd () const;
   void nbmObserveDecodeTime (QString const& mode, qint64 elapsedMs, double trPeriod);
+  QTimer * m_nbmRamWatch {nullptr};          // NBMODES-IC8TEM: controllo della RAM libera
+  int m_nbmLowRam {0};                        // 0 normale ... 3 massima riduzione
+  qint64 m_nbmLowRamChanged {0};
+  void nbmApplyGpuWaterfall ();
+  void nbmRamWatchdog ();
   bool    m_nbmExitConfirmed=false;  // NBMODES-IC8TEM: chiusura gia' confermata (o chiesta via UDP)
   bool    m_txFirst;
   bool    m_tx1_enabled_preference {true};

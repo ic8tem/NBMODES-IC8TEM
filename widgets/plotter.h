@@ -11,6 +11,7 @@
 #include <QFrame>
 #include <QSize>
 #include <QImage>
+#include <QPainter>
 #include <QVector>
 #include <QColor>
 #include <QToolTip>
@@ -30,6 +31,11 @@ class CPlotter : public QFrame
   Q_OBJECT
 
 public:
+  // NBMODES-IC8TEM: composizione sulla GPU (OpenGL) o sulla CPU come in WSJT-X
+  void setGpuRendering (bool on);
+  bool gpuRendering () const {return m_glView;}
+  void paintTo (QPainter&);
+  void refresh ();
   explicit CPlotter(QWidget *parent = 0);
   ~CPlotter();
 
@@ -164,6 +170,8 @@ private:
   QPixmap m_DialOverlayPixmap;
   QPixmap m_HoverOverlayPixmap;
   QPixmap m_WaterfallPixmap;
+  QImage m_rowImage;            // NBMODES-IC8TEM: una riga di waterfall
+  QWidget * m_glView {nullptr}; // NBMODES-IC8TEM: vista OpenGL (null = disegno CPU)
   QPixmap m_2DPixmap;
   QPixmap m_ScalePixmap;
   QPixmap m_OverlayPixmap;

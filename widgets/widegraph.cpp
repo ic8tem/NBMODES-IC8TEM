@@ -712,3 +712,7 @@ void WideGraph::restartTotalPower()
 {
   ui->widePlot->restartTotalPower();
 }
+
+// NBMODES-IC8TEM: waterfall e spettro composti dalla GPU (OpenGL) o dalla CPU
+void WideGraph::setGpuRendering (bool on) { ui->widePlot->setGpuRendering (on); }
+bool WideGraph::gpuRendering () const { return ui->widePlot->gpuRendering (); }

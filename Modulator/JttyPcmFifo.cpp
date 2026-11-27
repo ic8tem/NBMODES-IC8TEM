@@ -29,7 +29,7 @@ namespace
 }
 
 JttyPcmFifo::JttyPcmFifo (qint64 capacitySamples)
-  : m_buffer (int (capacitySamples))
+  : m_buffer ()   // NBMODES-IC8TEM: 5,8 MB allocati solo alla prima trasmissione JTTY
   , m_capacity {capacitySamples}
   , m_head {0}
   , m_tail {0}
@@ -64,6 +64,7 @@ bool JttyPcmFifo::enqueue (qint16 const * samples, qint64 count, qint64 epoch)
   if (!jttyPcmEnqueueFits (
         m_capacity, m_used.load (std::memory_order_acquire), count)) return false;
 
+  if (m_buffer.isEmpty ()) m_buffer.resize (int (m_capacity));
   qint64 const tail = copyIntoRing (m_buffer, m_capacity,
                                     m_tail.load (std::memory_order_relaxed),
                                     samples, count);

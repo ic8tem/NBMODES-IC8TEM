@@ -3,6 +3,7 @@
 #define NBM_HOST_DIALOGS_HPP
 
 #include <QString>
+#include <QtGlobal>
 class QWidget;
 class QSettings;
 
@@ -17,10 +18,17 @@ namespace nbm
     QString os;           // es. "Windows 10 Version 22H2"
     QString kernel;       // versione del kernel/build
     QString screens;      // uno per riga: risoluzione, DPI, scala
+    qint64 ramMB {0};     // memoria fisica totale
     QString key () const; // firma per capire se il computer e' cambiato
   };
 
   HostProfile detectHost ();
+
+  // Memoria fisica totale in MB (0 se non si riesce a leggerla)
+  qint64 totalRamMB ();
+  // Thread del decoder FT8 multithread quando la scelta e' "Auto": con 4 GB al massimo 2,
+  // con 8 GB al massimo 4, oltre 0 (= tutti i core, come WSJT-X).
+  int autoFt8Threads ();
 
   // Mostra il popup se il computer (o il monitor) e' diverso da quello salvato,
   // oppure sempre se force == true (voce di menu). Salva la nuova firma.

@@ -4,6 +4,8 @@
 #include <utility>
 
 #include <QHash>
+#include <algorithm>
+#include <vector>
 #include <QString>
 #include <QDate>
 #include <QDateTime>
@@ -28,8 +30,41 @@
 
 namespace
 {
-  // Dictionary mapping call sign to date of last upload to LotW
-  using dictionary = QHash<QString, QDate>;
+  // NBMODES-IC8TEM: elenco compatto nominativo -> data dell'ultimo upload a LoTW.
+  // Circa 200.000 nominativi: con QHash<QString, QDate> servivano ~20 MB, così ~3 MB
+  // (hash a 64 bit del nominativo + giorno giuliano, vettore ordinato).
+  class dictionary
+  {
+  public:
+    static quint64 key (QString const& call)
+    {
+      quint64 h = 1469598103934665603ULL;
+      for (auto ch : call) {h ^= quint64 (ch.toUpper ().unicode ()); h *= 1099511628211ULL;}
+      return h;
+    }
+    void add (QString const& call, QDate const& date) {v_.push_back ({key (call), qint32 (date.toJulianDay ())});}
+    void finalize ()
+    {
+      // a parita' di nominativo vale l'ultima riga del CSV, come prima con users[call] = date
+      std::stable_sort (v_.begin (), v_.end (), [] (E const& a, E const& b) {return a.k < b.k;});
+      std::vector<E> out;
+      out.reserve (v_.size ());
+      for (auto const& e : v_)
+        if (!out.empty () && out.back ().k == e.k) out.back () = e; else out.push_back (e);
+      out.shrink_to_fit ();
+      v_.swap (out);
+    }
+    int size () const {return int (v_.size ());}
+    QDate find (QString const& call) const
+    {
+      auto const k = key (call);
+      auto it = std::lower_bound (v_.begin (), v_.end (), k, [] (E const& e, quint64 x) {return e.k < x;});
+      return it != v_.end () && it->k == k ? QDate::fromJulianDay (it->jd) : QDate {};
+    }
+  private:
+    struct E {quint64 k; qint32 jd;};
+    std::vector<E> v_;
+  };
 
   struct load_result
   {
@@ -58,8 +93,9 @@ namespace
             auto const date_field = date_end < 0 ? l.mid (pos + 1) : l.mid (pos + 1, date_end - pos - 1);
             auto const call = l.left (pos).trimmed ();
             auto const date = QDate::fromString (date_field.trimmed (), "yyyy-MM-dd");
-            if (!call.isEmpty () && date.isValid ()) result.users[call] = date;
+            if (!call.isEmpty () && date.isValid ()) result.users.add (call, date);
           }
+        result.users.finalize ();
         if (f.error () != QFileDevice::NoError)
           {
             result.error = QObject::tr ("Failed to read LotW users CSV file: '%1'").arg (f.fileName ());
@@ -264,11 +300,11 @@ bool LotWUsers::user (QString const& call) const
 {
   if (m_->last_uploaded_.size ())
     {
-      auto p = m_->last_uploaded_.constFind (call);
-      if (p != m_->last_uploaded_.end ())
+      auto const d = m_->last_uploaded_.find (call);
+      if (d.isValid ())
         {
-          auto const age = p.value ().daysTo (QDateTime::currentDateTimeUtc ().date ());
-          return p.value ().isValid () && age >= 0 && age <= m_->age_constraint_;
+          auto const age = d.daysTo (QDateTime::currentDateTimeUtc ().date ());
+          return age >= 0 && age <= m_->age_constraint_;
         }
     }
   return false;

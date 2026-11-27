@@ -24,6 +24,10 @@ class WideGraph : public QDialog
   Q_OBJECT
 
 public:
+  void setGpuRendering (bool on);   // NBMODES-IC8TEM
+  bool gpuRendering () const;
+
+public:
   explicit WideGraph(QSettings *, QWidget *parent = 0);
   ~WideGraph ();
 

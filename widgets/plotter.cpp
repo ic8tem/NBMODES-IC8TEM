@@ -1,4 +1,5 @@
 #include "plotter.h"
+#include <QOpenGLWidget>
 #include <math.h>
 #include <QAction>
 #include <QMenu>
@@ -101,6 +102,7 @@ QSize CPlotter::sizeHint() const
 void CPlotter::resizeEvent(QResizeEvent* )                    //resizeEvent()
 {
   if(!size().isValid()) return;
+  if (m_glView) m_glView->setGeometry (rect ());
   if( m_Size != size() or (m_bReference != m_bReference0) or
       m_Percent2DScreen != m_Percent2DScreen0) {
     m_Size = size();
@@ -132,13 +134,21 @@ void CPlotter::resizeEvent(QResizeEvent* )                    //resizeEvent()
   }
   DrawOverlay();
   if(m_bScaleOK) drawSavedWaterfall();
+  if (m_glView) m_glView->update ();   // NBMODES-IC8TEM: ridisegna dopo aver rifatto i pixmap
 }
 
 void CPlotter::paintEvent(QPaintEvent *)                                // paintEvent()
 {
+  if (m_glView) return;   // NBMODES-IC8TEM: disegna la vista OpenGL figlia (paintTo)
   if(m_paintEventBusy) return;
   m_paintEventBusy=true;
   QPainter painter(this);
+  paintTo (painter);
+  m_paintEventBusy=false;
+}
+
+void CPlotter::paintTo (QPainter& painter)
+{
   painter.drawPixmap(0,0,m_ScalePixmap);
   painter.drawPixmap(0,30,m_WaterfallPixmap,0,0,m_scale.width(),m_h1);
   painter.drawPixmap(0,m_h1,m_2DPixmap);
@@ -150,7 +160,50 @@ void CPlotter::paintEvent(QPaintEvent *)                                // paint
     }
   }
   m_lastPaintedX = m_lastMouseX;
-  m_paintEventBusy=false;
+}
+
+// NBMODES-IC8TEM: vista OpenGL che copre il plotter. Riceve gli stessi disegni (pixmap del
+// waterfall, scala, spettro, sovrapposizioni) e li compone sulla GPU con il motore OpenGL di Qt.
+// Non riceve il mouse: clic e trascinamenti restano al plotter come prima.
+namespace
+{
+  class PlotterGlView : public QOpenGLWidget
+  {
+  public:
+    explicit PlotterGlView (CPlotter * p) : QOpenGLWidget {p}, plotter_ {p}
+    {
+      setAttribute (Qt::WA_TransparentForMouseEvents);
+      setFocusPolicy (Qt::NoFocus);
+    }
+  protected:
+    void paintGL () override
+    {
+      QPainter painter {this};
+      painter.fillRect (rect (), Qt::black);
+      plotter_->paintTo (painter);
+    }
+  private:
+    CPlotter * plotter_;
+  };
+}
+
+void CPlotter::setGpuRendering (bool on)
+{
+  if (on == bool (m_glView)) return;
+  if (on)
+    {
+      auto * v = new PlotterGlView {this};
+      v->setGeometry (rect ());
+      v->show ();
+      v->lower ();   // i controlli figli del plotter (es. casella in alto a sinistra) restano sopra
+      m_glView = v;
+    }
+  else
+    {
+      delete m_glView;
+      m_glView = nullptr;
+    }
+  refresh ();
 }
 
 void CPlotter::draw(float swide[], bool bScroll, bool bRed)
@@ -245,15 +298,23 @@ void CPlotter::draw(float swide[], bool bScroll, bool bRed)
   if(swidePlot[0]>1.4e30) painter1.setPen(Qt::red);
   ymin = 0;
   if(drawWaterfall) {
-    for(int i=0; i<izVisible; i++) {
-      y=swidePlot[i];
-      if( y != y ) y=0.0;   // check for nan - a nan is not equal to itself
-      y = 10.0*gain*y + m_plotZero;
-      if (y<0.0) y=0.0;
-      if (y>254.0) y=254.0;
-      int y1 = y;
-      if (swidePlot[i]<1.e29) painter1.setPen(g_ColorTbl[y1]);
-      painter1.drawPoint(i,m_j);
+    // NBMODES-IC8TEM: la riga si compone in un'immagine e si disegna in un colpo solo
+    // (prima: un setPen + drawPoint per ogni pixel). Stessi colori, stessi marcatori.
+    if (izVisible > 0) {
+      if (m_rowImage.width () != izVisible) m_rowImage = QImage (izVisible, 1, QImage::Format_RGB32);
+      auto * row = reinterpret_cast<QRgb *> (m_rowImage.scanLine (0));
+      QRgb marker = painter1.pen ().color ().rgb ();
+      for(int i=0; i<izVisible; i++) {
+        y=swidePlot[i];
+        if( y != y ) y=0.0;   // check for nan - a nan is not equal to itself
+        y = 10.0*gain*y + m_plotZero;
+        if (y<0.0) y=0.0;
+        if (y>254.0) y=254.0;
+        int y1 = y;
+        if (swidePlot[i]<1.e29) marker = g_ColorTbl[y1].rgb ();
+        row[i] = marker;
+      }
+      painter1.drawImage (0, m_j, m_rowImage);
     }
   }
   if(drawWaterfall) m_line++;
@@ -308,7 +369,7 @@ void CPlotter::draw(float swide[], bool bScroll, bool bRed)
   }
 
   if(!drawWaterfall) {
-    update();
+    refresh ();
     m_bScaleOK=true;
     return;
   }
@@ -410,7 +471,7 @@ void CPlotter::draw(float swide[], bool bScroll, bool bRed)
     if(m_x < m_scale.width()-1) m_x++;
   }
 
-  update();                                    //trigger a new paintEvent
+  refresh ();                                    //trigger a new paintEvent
   m_bScaleOK=true;
 }
 
@@ -445,7 +506,7 @@ void CPlotter::drawSavedWaterfall()
     QPainter painter (&m_WaterfallPixmap);
     drawJttyLabels (painter, false);
   }
-  update();                                    //trigger a new paintEvent
+  refresh ();                                    //trigger a new paintEvent
   m_bReplot=false;
 }
 
@@ -881,7 +942,7 @@ int CPlotter::plot2dGain()                                //plot2dGain
 void CPlotter::setPlot2dGain(int n)                       //setPlot2dGain
 {
   m_plot2dGain=n;
-  update();
+  refresh ();
 }
 
 int CPlotter::plot2dZero()                                //plot2dZero
@@ -899,7 +960,7 @@ void CPlotter::setStartFreq(int f)                    //SetStartFreq()
   m_scale.setStartHz(f);
   resizeEvent(NULL);
   DrawOverlay();
-  update();
+  refresh ();
 }
 
 int CPlotter::startFreq()                              //startFreq()
@@ -915,7 +976,7 @@ void CPlotter::setBinsPerPixel(int n)                         //setBinsPerPixel
 {
   m_scale.setBinsPerPixel(n);
   DrawOverlay();                         //Redraw scales and ticks
-  update();                              //trigger a new paintEvent}
+  refresh ();                              //trigger a new paintEvent}
 }
 
 int CPlotter::binsPerPixel()                                   //binsPerPixel
@@ -932,7 +993,7 @@ void CPlotter::setRxFreq (int x)                               //setRxFreq
 {
   m_rxFreq = x;         // x is freq in Hz
   DrawOverlay();
-  update();
+  refresh ();
 }
 
 int CPlotter::rxFreq() {return m_rxFreq;}                      //rxFreq
@@ -951,7 +1012,7 @@ void CPlotter::mouseMoveEvent (QMouseEvent * event)
   if(x>m_Size.width()) x = m_Size.width();
   if(m_freq) m_pos = event->globalPos();
   m_lastMouseX = x;
-  update();
+  refresh ();
 
   event->ignore();
   if(m_freq) {
@@ -1048,14 +1109,14 @@ void CPlotter::setNsps(double trperiod, int nsps)                    //setNsps
   if(m_nsps==252000) fftBinWidth=1500.0/32768.0;
   m_scale.setFftBinWidthHz(fftBinWidth);
   DrawOverlay();                         //Redraw scales and ticks
-  update();                              //trigger a new paintEvent}
+  refresh ();                              //trigger a new paintEvent}
 }
 
 void CPlotter::setTxFreq(int n)                                 //setTxFreq
 {
   m_txFreq=n;
   DrawOverlay();
-  update();
+  refresh ();
 }
 
 void CPlotter::setMode(QString mode)                            //setMode
@@ -1077,7 +1138,7 @@ void CPlotter::setDialFreq(double d)
 {
   m_dialFreq=d;
   DrawOverlay();
-  update();
+  refresh ();
 }
 
 void CPlotter::setRxBand(QString band)
@@ -1114,7 +1175,7 @@ void CPlotter::setFST4_FreqRange(int fLow,int fHigh)
   m_nfa=fLow;
   m_nfb=fHigh;
   DrawOverlay();
-  update();
+  refresh ();
 }
 
 void CPlotter::setSingleDecode(bool b)
@@ -1132,7 +1193,7 @@ void CPlotter::SetPercent2DScreen(int percent)
 {
   m_Percent2DScreen=percent;
   resizeEvent(NULL);
-  update();
+  refresh ();
 }
 void CPlotter::setVHF(bool bVHF)
 {
@@ -1169,7 +1230,7 @@ void CPlotter::setBars(bool b)
   setMouseTracking(b || m_freq);
   m_bars=b;
   DrawOverlay();
-  update();
+  refresh ();
 }
 
 void CPlotter::showFreq(bool b)
@@ -1182,5 +1243,10 @@ void CPlotter::setDarkStyle (bool b)     //set wide filter lines for Hound mode
 {
   m_useDarkStyle=b;
   DrawOverlay();
-  update();
+  refresh ();
+}
+
+void CPlotter::refresh ()
+{
+  if (m_glView) m_glView->update (); else QWidget::update ();
 }

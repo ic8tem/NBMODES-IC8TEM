@@ -8,6 +8,7 @@
 #include "lib/DecoderWorkerLock.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 
@@ -207,7 +208,7 @@ DecoderIpc::Status DecoderIpc::Session::open (QString const& key, QString const&
     }
 #endif
   error_.clear ();
-  initialize (*static_cast<shared_dec_data_t *> (memory_.data ()));
+  initializeFresh (*static_cast<shared_dec_data_t *> (memory_.data ()));
   return Status::Ok;
 }
 
@@ -394,6 +395,21 @@ qint32 DecoderIpc::protocolVersion (shared_dec_data_t const& shared)
 void DecoderIpc::initialize (shared_dec_data_t& shared)
 {
   std::memset (&shared, 0, sizeof (shared));
+  decoder_ipc_expected_layout (&shared.layout);
+  decoder_ipc_control_initialize (&shared.control.generation, &shared.control.state,
+                                  &shared.control.version, &shared.control.progress);
+}
+
+// NBMODES-IC8TEM: una memoria condivisa appena creata è già a zero (Windows e POSIX). Non si
+// riscrivono a zero spettri e audio (circa 48 MB), così le pagine restano libere finché non servono;
+// si azzerano intestazione, parametri e metadati come fa initialize ().
+void DecoderIpc::initializeFresh (shared_dec_data_t& shared)
+{
+  auto * base = reinterpret_cast<char *> (&shared);
+  std::memset (base, 0, offsetof (shared_dec_data_t, payload));
+  std::memset (&shared.payload.params, 0, sizeof shared.payload.params);
+  auto const tail = offsetof (shared_dec_data_t, metadata);
+  std::memset (base + tail, 0, sizeof (shared_dec_data_t) - tail);
   decoder_ipc_expected_layout (&shared.layout);
   decoder_ipc_control_initialize (&shared.control.generation, &shared.control.state,
                                   &shared.control.version, &shared.control.progress);

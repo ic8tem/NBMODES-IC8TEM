@@ -1,6 +1,7 @@
 #ifndef RECEIVE_AUDIO_HPP
 #define RECEIVE_AUDIO_HPP
 
+#include "NbmLazyAlloc.hpp"
 #include "commons.h"
 #include "DecDataMutex.hpp"
 #include <QMetaType>
@@ -42,7 +43,7 @@ class ReceiveAudioProducer
 {
 public:
   ReceiveAudioProducer ()
-    : data_ {new dec_data_t {}}
+    : data_ {nbm::lazy_zero_new<dec_data_t> ()}
     , source_ {std::make_shared<ReceiveAudioSourceState> ()}
   {
   }
@@ -84,7 +85,7 @@ public:
   }
 
 private:
-  std::unique_ptr<dec_data_t> data_;
+  std::unique_ptr<dec_data_t, nbm::LazyDelete<dec_data_t>> data_;
   std::shared_ptr<ReceiveAudioSourceState> source_;
   int capturedEnd_ = 0;
 };

@@ -47,6 +47,10 @@ jobs:
           - Elenco esclusi senza limiti, con call barrati; "Nascondi chi non usa LoTW"
           - CSV LoTW e CALL3.TXT aggiornati ogni giorno (regole LIVETROPOVHF), locatori mancanti da G7VRD
           - Decoder adattato alla potenza del PC (menu Decodifica)
+          - RAM: aree audio occupate solo quando servono (finestra a riposo ~180 MB invece di ~280), elenco LoTW compatto
+          - FST4, FST4W e JTTY tolti dai menu; thread FT8 "Auto" secondo la RAM (2 con 4 GB, 4 con 8 GB)
+          - GPU: rilevata all'avvio; waterfall e spettro in OpenGL quando conviene (menu Visualizza)
+          - Con RAM libera sotto 500 MB: riduzioni automatiche a gradini
 
           Da collaudare: FT8 e FT4 in HF.
           NOTE

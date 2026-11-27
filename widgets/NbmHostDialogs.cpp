@@ -2,6 +2,17 @@
 // Il popup di chiusura riprende quello di YAEC e YA-NEC (icona, domanda in grassetto,
 // ringraziamento in corsivo, barra grigia con Si' e No).
 #include "NbmHostDialogs.hpp"
+#include "NbmGpu.hpp"
+#include <algorithm>
+#include <QLocale>
+#ifdef _WIN32
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#else
+#  include <unistd.h>
+#endif
 
 #include <QStandardPaths>
 
@@ -99,12 +110,39 @@ namespace nbm
 
   QString HostProfile::key () const
   {
-    return QStringList {cpu, QString::number (cores), avx2 ? "avx2" : "sse2", os, screens}.join ('|');
+    return QStringList {cpu, QString::number (cores), avx2 ? "avx2" : "sse2", os, screens, QString::number (ramMB / 512), detectGpu ().name}.join ('|');
+  }
+
+  qint64 totalRamMB ()
+  {
+    static qint64 const mb = [] () -> qint64 {
+#ifdef _WIN32
+      MEMORYSTATUSEX m;
+      m.dwLength = sizeof m;
+      if (GlobalMemoryStatusEx (&m)) return qint64 (m.ullTotalPhys / (1024 * 1024));
+      return 0;
+#else
+      long const pages = sysconf (_SC_PHYS_PAGES);
+      long const size = sysconf (_SC_PAGE_SIZE);
+      return pages > 0 && size > 0 ? qint64 (pages) * size / (1024 * 1024) : 0;
+#endif
+    } ();
+    return mb;
+  }
+
+  int autoFt8Threads ()
+  {
+    auto const ram = totalRamMB ();
+    int const cores = std::max (1, QThread::idealThreadCount ());
+    if (ram > 0 && ram <= 4700) return std::min (2, cores);
+    if (ram > 0 && ram <= 8700) return std::min (4, cores);
+    return 0;
   }
 
   HostProfile detectHost ()
   {
     HostProfile h;
+    h.ramMB = totalRamMB ();
     h.cpu = cpuBrand ();
     h.cores = QThread::idealThreadCount ();
     h.avx2 = nbm_sldpc_avx2_c () != 0;
@@ -160,13 +198,32 @@ namespace nbm
 
     QStringList found;
     found << QObject::tr ("Processore: %1, %2 thread").arg (h.cpu).arg (h.cores)
-          << QObject::tr ("Sistema: %1 (%2)").arg (h.os, h.kernel);
+          << QObject::tr ("Sistema: %1 (%2)").arg (h.os, h.kernel)
+          << QObject::tr ("Memoria: %1 GB").arg (QLocale {}.toString (h.ramMB / 1024., 'f', 1));
+    {
+      auto const& g = detectGpu ();
+      QString gpu = g.name.isEmpty () ? QObject::tr ("non rilevata") : g.name;
+      if (g.dedicatedMB > 0) gpu += QObject::tr (", %1 MB dedicati").arg (g.dedicatedMB);
+      if (g.sharedMB > 0) gpu += QObject::tr (", %1 MB condivisi").arg (g.sharedMB);
+      auto const load = gpuLoadPercent ();
+      if (load >= 0) gpu += QObject::tr (", carico attuale %1%").arg (load);
+      found << QObject::tr ("Scheda grafica: %1").arg (gpu);
+    }
     found << h.screens.split ('\n');
     QStringList set;
     set << (h.avx2 ? QObject::tr ("Decoder FT8: superldpc nella versione veloce AVX2")
                    : QObject::tr ("Decoder FT8: superldpc nella versione SSE2 per processori senza AVX2 (stesse decodifiche, un po' più lento)"))
-        << QObject::tr ("Decoder FT8 multithread: numero di thread automatico (%1 disponibili)").arg (h.cores)
+        << (autoFt8Threads () > 0
+            ? QObject::tr ("Decoder FT8 multithread: %1 thread su %2, per non occupare troppa memoria").arg (autoFt8Threads ()).arg (h.cores)
+            : QObject::tr ("Decoder FT8 multithread: tutti i %1 thread disponibili").arg (h.cores))
+        << QObject::tr ("Memoria: aree audio occupate solo quando servono; chat, aerei e satelliti caricati solo quando apri la loro finestra")
         << QObject::tr ("Interfaccia: scala del sistema operativo per ogni monitor");
+    {
+      QString why;
+      gpuWaterfallWanted (settings, &why);
+      set << QObject::tr ("Waterfall e spettro: %1").arg (why)
+          << QObject::tr ("Se la RAM libera scende sotto 500 MB: prima il waterfall torna alla CPU, poi meno thread FT8, poi pausa di G7VRD");
+    }
     if (h.os.contains ("Windows 7") || h.os.contains ("Windows 8"))
       set << QObject::tr ("Su %1 alcune funzioni di rete recenti potrebbero non essere disponibili").arg (h.os);
 
