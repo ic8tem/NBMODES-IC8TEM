@@ -90,6 +90,19 @@ project (wsjtx
   LANGUAGES C CXX Fortran
   )
 
+# NBMODES-IC8TEM: versione propria del programma (la base WSJT-X resta in PROJECT_VERSION)
+set (NBM_VERSION 1.0.0)
+add_compile_definitions (NBM_VERSION_STR="${NBM_VERSION}")
+
+# NBMODES-IC8TEM: nomi degli eseguibili lanciati dal programma (vedi in fondo OUTPUT_NAME)
+if (APPLE)
+  set (NBM_DECODER_OUTPUT_NAME jt9)
+  add_compile_definitions (NBM_DECODER_EXE="jt9" NBM_WSPRD_EXE="wsprd")
+else ()
+  set (NBM_DECODER_OUTPUT_NAME nbmodes-decoder)
+  add_compile_definitions (NBM_DECODER_EXE="nbmodes-decoder" NBM_WSPRD_EXE="nbmodes-wsprd")
+endif ()
+
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 set (CMAKE_CXX_EXTENSIONS ON)
@@ -750,8 +763,12 @@ if (WSJT_ENABLE_TESTS)
   string (REPLACE "." "\\." wsjtx_version_pattern "${wsjtx_VERSION}")
   foreach (program jt9 wsjt-codec)
     add_test (NAME test_${program}_version COMMAND $<TARGET_FILE:${program}> --version)
+    set (shown_name ${program})
+    if (program STREQUAL "jt9")
+      set (shown_name ${NBM_DECODER_OUTPUT_NAME})   # NBMODES-IC8TEM
+    endif ()
     set_tests_properties (test_${program}_version PROPERTIES
-      PASS_REGULAR_EXPRESSION "^${program} ${wsjtx_version_pattern} \\(revision ([0-9a-f]+(-dirty)?|unavailable)\\)"
+      PASS_REGULAR_EXPRESSION "^${shown_name} ${wsjtx_version_pattern} \\(revision ([0-9a-f]+(-dirty)?|unavailable)\\)"
       )
   endforeach ()
   add_test (NAME test_jt9_cli_validation
@@ -1960,3 +1977,14 @@ configure_file ("${PROJECT_SOURCE_DIR}/CMakeCPackOptions.cmake.in"
 set (CPACK_PROJECT_CONFIG_FILE "${PROJECT_BINARY_DIR}/CMakeCPackOptions.cmake")
 
 include (CPack)
+
+
+# NBMODES-IC8TEM: eseguibili con nomi propri, diversi da quelli di WSJT-X (macOS resta com'e' per ora:
+# il nome del bundle segue il progetto).
+if (NOT APPLE)
+  set_target_properties (wsjtx PROPERTIES OUTPUT_NAME nbmodes)
+  set_target_properties (jt9 PROPERTIES OUTPUT_NAME nbmodes-decoder)
+  target_compile_definitions (jt9 PRIVATE JT9_PROGRAM_NAME=\"nbmodes-decoder\")
+  set_target_properties (wsprd PROPERTIES OUTPUT_NAME nbmodes-wsprd)
+  set_target_properties (message_aggregator PROPERTIES OUTPUT_NAME nbmodes-message-aggregator)
+endif ()

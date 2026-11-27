@@ -92,11 +92,12 @@ function (check_help program)
   endforeach ()
 endfunction ()
 
+get_filename_component (jt9_name "${JT9}" NAME_WE)   # NBMODES-IC8TEM: nbmodes-decoder fuori da macOS
 check_help ("${JT9}"
-  OFFERS "Usage: jt9 \\[OPTIONS\\]" "jt9 -s <key>" "\n -s NAME" "\n --shmem NAME" "\n --ipc-lock PATH"
+  OFFERS "Usage: ${jt9_name} \\[OPTIONS\\]" "${jt9_name} -s <key>" "\n -s NAME" "\n --shmem NAME" "\n --ipc-lock PATH"
          "\n -r PATH" "\n --share-path PATH"
   OMITS "--stream" "wsjt-codec")
 check_help ("${WSJT_CODEC}"
   OFFERS "Usage: wsjt-codec \\[OPTIONS\\]" "cat <pcm-stream> \\| wsjt-codec \\[OPTIONS\\]"
          "\n -r PATH" "\n --share-path PATH"
-  OMITS "--stream" "\n -0" "Usage: jt9 " "-s <key>" "\n -s NAME" "--shmem" "--ipc-lock")
+  OMITS "--stream" "\n -0" "Usage: ${jt9_name} " "-s <key>" "\n -s NAME" "--shmem" "--ipc-lock")

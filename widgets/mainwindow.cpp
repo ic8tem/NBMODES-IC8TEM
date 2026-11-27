@@ -3088,7 +3088,7 @@ void MainWindow::dataSink(qint64 frames)
 
 void MainWindow::startP1()
 {
-  p1.start (QDir::toNativeSeparators (QDir {QApplication::applicationDirPath ()}.absoluteFilePath ("wsprd")), m_cmndP1);
+  p1.start (QDir::toNativeSeparators (QDir {QApplication::applicationDirPath ()}.absoluteFilePath (NBM_WSPRD_EXE)), m_cmndP1);
 }
 
 

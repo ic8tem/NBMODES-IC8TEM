@@ -2,7 +2,7 @@
 Version=1.0
 Name=Message Aggregator
 Comment=Amateur Radio Weak Signal Operating
-Exec=message_aggregator
+Exec=nbmodes-message-aggregator
 Icon=wsjtx_icon
 Terminal=false
 X-MultipleArgs=false

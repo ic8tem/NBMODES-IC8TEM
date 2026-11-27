@@ -72,7 +72,9 @@ program jt9
   character c
   character(len=500) optarg, infile, trperiod_text
   character wisfile*256
-  character(len=10) :: program_name
+  character(len=32) :: program_name
+  character(len=512) :: nbm_arg0
+  integer :: nbm_i
 
   integer :: arglen,stat,offset,remain,mode=0,flow=200,fsplit=2700,          &
        fhigh=4000,nrxfreq=1500,ndepth=1,nexp_decode=0,nQSOProg=0,ncycles=3,  &
@@ -179,7 +181,14 @@ program jt9
   common/decstats/ntry65a,ntry65b,n65a,n65b,num9,numfano
   data npatience/1/,nthreads/1/,wisfile/' '/
 
-  program_name = 'jt9'
+  ! NBMODES-IC8TEM: il nome del programma viene da argv(0) (nbmodes-decoder su Windows/Linux)
+  call get_command_argument(0, nbm_arg0)
+  nbm_i = max(index(nbm_arg0, '/', back=.true.), index(nbm_arg0, achar(92), back=.true.))
+  program_name = nbm_arg0(nbm_i+1:)
+  nbm_i = index(program_name, '.exe', back=.true.)
+  if (nbm_i == 0) nbm_i = index(program_name, '.EXE', back=.true.)
+  if (nbm_i > 1) program_name = program_name(1:nbm_i-1)
+  if (len_trim(program_name) == 0) program_name = 'jt9'
   if (jt9_stream_available()) program_name = 'wsjt-codec'
   nsubmode = 0
   ntol = 20

@@ -98,7 +98,7 @@ for exe in "${images[@]}"; do
   fi
 
   case "$(basename "$exe" | tr '[:upper:]' '[:lower:]')" in
-    jt9.exe|wsjt-codec.exe)
+    jt9.exe|nbmodes-decoder.exe|wsjt-codec.exe)
       qt_imports=$(printf '%s\n' "$imports" | awk 'tolower($0) ~ /^qt.*\.dll$/')
       if [ -n "$qt_imports" ]; then
         echo "::error::$exe must not depend on Qt: $qt_imports"

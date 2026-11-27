@@ -49,8 +49,8 @@ run_program() {
   local tree="$1" program="$2" scratch="${WORK}/run-${2}" path arguments=() limit=()
   mkdir -p "$scratch"
   case "$program" in
-    jt9|wsjt-codec) arguments=(--help) ;;
-    wsprd)
+    jt9|nbmodes-decoder|wsjt-codec) arguments=(--help) ;;
+    wsprd|nbmodes-wsprd)
       [ -f "$SAMPLE" ] || fail "WSPR sample not found: $SAMPLE"
       arguments=(-a "$scratch" "$SAMPLE")
       ;;

@@ -104,7 +104,7 @@ if (UNIX AND NOT WSJT_SHM_OPEN_IN_LIBC)
   target_link_libraries (test_shmem_decoder_worker rt)
 endif ()
 set_target_properties (test_shmem_decoder_worker PROPERTIES
-  OUTPUT_NAME jt9
+  OUTPUT_NAME ${NBM_DECODER_OUTPUT_NAME}
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/shmem-worker)
 
 add_executable (test_shmem_decoder_backend

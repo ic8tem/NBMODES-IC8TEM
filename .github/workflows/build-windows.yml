@@ -331,7 +331,7 @@ jobs:
       # linkage covered by CI.
       - name: Verify binary
         run: |
-          file wsjtx-build/jt9.exe
+          file wsjtx-build/nbmodes-decoder.exe
           file wsjtx-build/map65/map65.exe
           test -f wsjtx-build/map65/map65.exe
 
@@ -365,7 +365,7 @@ jobs:
         run: |
           WORKSPACE=$(cygpath "${GITHUB_WORKSPACE}")
           .github/scripts/smoke-launch-windows.sh \
-            "${WORKSPACE}/stage-main/bin/wsjtx.exe" \
+            "${WORKSPACE}/stage-main/bin/nbmodes.exe" \
             --startup-smoke-test --rig-name CI-STARTUP
 
       - name: Upload WSJT-X startup diagnostics
@@ -380,9 +380,11 @@ jobs:
       - name: Smoke-launch staged jt9 (clean PATH)
         run: |
           WORKSPACE=$(cygpath "${GITHUB_WORKSPACE}")
-          .github/scripts/smoke-launch-windows.sh "${WORKSPACE}/stage-main/bin/jt9.exe" --help
+          .github/scripts/smoke-launch-windows.sh "${WORKSPACE}/stage-main/bin/nbmodes-decoder.exe" --help
 
       - name: Package release tarballs
+        # NBMODES-IC8TEM: niente tarball dei programmi a riga di comando di WSJT-X; si distribuisce solo l'installatore
+        if: ${{ false }}
         run: |
           WORKSPACE=$(cygpath "${GITHUB_WORKSPACE}")
           .github/scripts/package-cli-tools.sh \
@@ -396,6 +398,8 @@ jobs:
             --out "${WORKSPACE}/release-tarballs"
 
       - name: Smoke-launch release tarballs (clean PATH)
+        # NBMODES-IC8TEM: niente tarball dei programmi a riga di comando di WSJT-X; si distribuisce solo l'installatore
+        if: ${{ false }}
         run: |
           WORKSPACE=$(cygpath "${GITHUB_WORKSPACE}")
           .github/scripts/smoke-release-tarballs.sh \
@@ -406,6 +410,8 @@ jobs:
             --dir "${WORKSPACE}/release-tarballs"
 
       - name: Audit release tarball runtime imports
+        # NBMODES-IC8TEM: niente tarball dei programmi a riga di comando di WSJT-X; si distribuisce solo l'installatore
+        if: ${{ false }}
         run: |
           audit_dir=$(mktemp -d)
           for archive in release-tarballs/*.tar.gz; do
@@ -493,12 +499,14 @@ jobs:
         with:
           name: wsjtx-${{ inputs.version }}-windows-x86_64
           path: |
-            wsjtx-build/jt9.exe
-            wsjtx-build/wsprd.exe
-            wsjtx-build/wsjtx.exe
+            wsjtx-build/nbmodes-decoder.exe
+            wsjtx-build/nbmodes-wsprd.exe
+            wsjtx-build/nbmodes.exe
           retention-days: ${{ inputs.artifact_retention_days }}
 
       - name: Upload release tarballs
+        # NBMODES-IC8TEM: niente tarball dei programmi a riga di comando di WSJT-X; si distribuisce solo l'installatore
+        if: ${{ false }}
         uses: ./.github/actions/upload-release-tarballs
         with:
           version: ${{ inputs.version }}

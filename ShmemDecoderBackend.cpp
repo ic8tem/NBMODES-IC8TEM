@@ -249,7 +249,7 @@ DecoderProcessSupervisor::Command ShmemDecoderBackend::command ()
   };
   QProcessEnvironment environment {m_launch.environment};
   environment.insert ("OMP_STACKSIZE", "10M");
-  return {QDir::toNativeSeparators (QDir {m_launch.programDirectory}.filePath ("jt9")),
+  return {QDir::toNativeSeparators (QDir {m_launch.programDirectory}.filePath (NBM_DECODER_EXE)),
           arguments, environment};
 }
 
