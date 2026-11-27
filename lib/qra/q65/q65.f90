@@ -9,6 +9,15 @@ module q65
 
   integer, parameter :: NSTEP=8
   real, parameter :: PLOG_MIN=-242.0
+! NBMODES-IC8TEM: spread shape used by the fast-fading metric.
+! 0=Gaussian, 1=Lorentzian (WSJT-X default), 2=both (Lorentzian first).
+! -1 = not yet set: read NBM_Q65_FADE from the environment (jt9/tests).
+  integer, save :: q65_fade_mode=-1
+! NBMODES-IC8TEM: bin merging for very wide spreads (24 GHz and up).
+! q65_merge_opt: -1 unset (env NBM_Q65_MERGE), 0 off, 1 on.
+! q65_mfac: current merge factor (1 = normal WSJT-X path).
+  integer, save :: q65_merge_opt=-1
+  integer, save :: q65_mfac=1
   integer, parameter :: isync(22) = [1,9,12,13,15,22,23,26,27,33,35, &
        38,46,50,55,60,62,66,69,74,76,85]
   type :: q65_state
@@ -352,6 +361,7 @@ subroutine q65_dec0(iavg,iwave,ntrperiod,nfqso,ntol,lclearave,  &
   integer*2 iwave(0:12000*ntrperiod-1)   !Raw data
   integer dat4(13)
   character*37 decoded
+  real, allocatable :: s3m(:,:)
   logical lclearave
   real, pointer :: s3(:,:),ccf1(:)
 
@@ -519,6 +529,34 @@ subroutine q65_dec0(iavg,iwave,ntrperiod,nfqso,ntol,lclearave,  &
      call q65_dec_q012(s3,LL,snr2,dat4,idec,decoded)
   endif
 
+! NBMODES-IC8TEM: if nothing decoded, retry with merged bins (x2, x4)
+! so spreads wider than the WSJT-X tables/window (~230 Hz B90, +/-64
+! bins) are still covered. Off in "WSJT-X puro".
+  if(idec.lt.0) call q65_merge_init()
+  if(idec.lt.0 .and. q65_merge_opt.eq.1 .and. mode_q65.ge.2) then
+     mode0=mode_q65
+     do mm=2,4,2
+        if(mm.gt.mode0) exit
+        q65_mfac=mm
+        mode_q65=mode0/mm
+        LLm=64*(2+mode_q65)
+        if(allocated(s3m)) deallocate(s3m)
+        allocate(s3m(-64:LLm-65,63))
+        if(ncw.gt.0 .and. iavg.le.1) then
+           call q65_dec_q3(s1,iz,jz,s3m,LLm,ipk,jpk,snr2,dat4,idec,decoded)
+        endif
+        if(idec.lt.0 .and. (iavg.eq.0 .or. iavg.eq.2)) then
+           call q65_s1_to_s3(s1,iz,jz,ipk,jpk,LLm,mode_q65,sync,s3m)
+           call q65_dec_q012(s3m,LLm,snr2,dat4,idec,decoded)
+        endif
+        mode_q65=mode0
+        q65_mfac=1
+        if(idec.ge.0) exit
+     enddo
+     mode_q65=mode0
+     q65_mfac=1
+  endif
+
   if(idec.lt.0 .and. max_drift.eq.50 .and. stageno.eq.5) then
 
      if(associated(s1w)) then
@@ -658,7 +696,7 @@ subroutine q65_dec_q3(s1,iz,jz,s3,LL,ipk,jpk,snr2,dat4,idec,decoded)
 
   do ibw=ibwa,ibwb
      b90=1.72**ibw
-     b90ts=b90/baud
+     b90ts=b90/(baud*q65_mfac)
      call q65_dec1(s3,nsubmode,b90ts,esnodb,irc,dat4,decoded)
      nrc=irc
      if(irc.ge.0) then
@@ -710,7 +748,7 @@ subroutine q65_dec_q012(s3,LL,snr2,dat4,idec,decoded)
 
      do ibw=ibwa,ibwb
         b90=1.72**ibw
-        b90ts=b90/baud
+        b90ts=b90/(baud*q65_mfac)
         call q65_dec2(s3,nsubmode,b90ts,esnodb,irc,dat4,decoded)
         nrc=irc
         if(irc.ge.0) then
@@ -935,6 +973,27 @@ subroutine q65_ccf_22(s1,iz,jz,nfqso,ntol,ipk,jpk,f0,xdt,ccf2)
   return
 end subroutine q65_ccf_22
 
+subroutine q65_merge_init()
+  character*8 cenv
+  integer ist
+  if(q65_merge_opt.ge.0) return
+  q65_merge_opt=1
+  call get_environment_variable('NBM_Q65_MERGE',cenv,status=ist)
+  if(ist.eq.0 .and. cenv(1:1).eq.'0') q65_merge_opt=0
+end subroutine q65_merge_init
+
+subroutine q65_fade_init()
+  character*8 cenv
+  integer ist
+  if(q65_fade_mode.ge.0) return
+  q65_fade_mode=1
+  call get_environment_variable('NBM_Q65_FADE',cenv,status=ist)
+  if(ist.eq.0) then
+     if(cenv(1:1).eq.'g' .or. cenv(1:1).eq.'G' .or. cenv(1:1).eq.'0') q65_fade_mode=0
+     if(cenv(1:1).eq.'b' .or. cenv(1:1).eq.'B' .or. cenv(1:1).eq.'2') q65_fade_mode=2
+  endif
+end subroutine q65_fade_init
+
 subroutine q65_dec1(s3,nsubmode,b90ts,esnodb,irc,dat4,decoded)
 
 ! Attmpt a full-AP list decode.
@@ -946,7 +1005,10 @@ subroutine q65_dec1(s3,nsubmode,b90ts,esnodb,irc,dat4,decoded)
   character c77*77,decoded*37
   logical unpk77_success
 
-  nFadingModel=1
+  call q65_fade_init()
+  do ifm=1,merge(2,1,q65_fade_mode.eq.2)
+  nFadingModel=q65_fade_mode
+  if(q65_fade_mode.eq.2) nFadingModel=2-ifm   !1 then 0
   decoded='                                     '
   if(ncw<=0.or.maxval(s3)<=0.) then
      dat4=0
@@ -965,6 +1027,8 @@ subroutine q65_dec1(s3,nsubmode,b90ts,esnodb,irc,dat4,decoded)
      irc=-1
   endif
   nrc=irc
+  if(irc.ge.0) exit
+  enddo
 
   return
 end subroutine q65_dec1
@@ -980,7 +1044,10 @@ subroutine q65_dec2(s3,nsubmode,b90ts,esnodb,irc,dat4,decoded)
   character c77*77,decoded*37
   logical unpk77_success
 
-  nFadingModel=1
+  call q65_fade_init()
+  do ifm=1,merge(2,1,q65_fade_mode.eq.2)
+  nFadingModel=q65_fade_mode
+  if(q65_fade_mode.eq.2) nFadingModel=2-ifm   !1 then 0
   decoded='                                     '
   dat4=0
   esnodb=0.
@@ -990,6 +1057,8 @@ subroutine q65_dec2(s3,nsubmode,b90ts,esnodb,irc,dat4,decoded)
   call q65_dec(s3,s3prob,APmask,APsymbols,maxiters,esnodb,dat4,irc)
   if(sum(dat4).le.0) irc=-2
   nrc=irc
+  if(irc.ge.0) exit
+  enddo
   if(irc.ge.0) then
      write(c77,1000) dat4(1:12),dat4(13)/2
 1000 format(12b6.6,b5.5)
@@ -1007,6 +1076,37 @@ subroutine q65_s1_to_s3(s1,iz,jz,ipk,jpk,LL,mode_q65,sync,s3)
   real s3(-64:LL-65,63)
   real sync(85)                          !sync vector
   
+  if(q65_mfac.gt.1) then
+! NBMODES-IC8TEM: merged bins. Merged bin i' is centred on s1 bin
+! c0+i'*m and sums m+1 bins with half weight at both ends (triangular),
+! so tone centres stay aligned and the +/-64-bin window becomes +/-64*m.
+     m=q65_mfac
+     mh=m/2
+     ic0=i0+ipk+mode_q65*m
+     j=j0+jpk-7
+     n=0
+     do k=1,85
+        j=j+8
+        if(sync(k).gt.0.0) cycle
+        n=n+1
+        s3(:,n)=0.
+        if(j.lt.1 .or. j.gt.jz) cycle
+        do ii=-64,LL-65
+           ic=ic0+ii*m
+           xs=0.
+           do id=-mh,mh
+              if(ic+id.lt.1 .or. ic+id.gt.iz) cycle
+              w=1.0
+              if(abs(id).eq.mh) w=0.5
+              xs=xs+w*s1(ic+id,j)
+           enddo
+           s3(ii,n)=xs
+        enddo
+     enddo
+     call q65_bzap(s3,LL)
+     return
+  endif
+
   i1=i0+ipk-64 + mode_q65
   i2=i1+LL-1
   if(i1.ge.1 .and. i2.le.iz) then

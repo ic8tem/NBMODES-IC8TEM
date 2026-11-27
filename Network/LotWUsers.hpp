@@ -29,6 +29,7 @@ public:
   // returns true if the specified call sign 'call' has uploaded their
   // log to LotW in the last 'age_constraint_days' days
   bool user (QString const& call) const;
+  int size () const;   // NBMODES-IC8TEM: voci caricate (0 = elenco non ancora disponibile)
 
   Q_SIGNAL void LotW_users_error (QString const& reason) const;
   Q_SIGNAL void progress (QString const& reason) const;

@@ -17,7 +17,7 @@ jobs:
   windows:
     uses: ./.github/workflows/build-windows.yml
     with:
-      version: 1.0.0-collaudo1
+      version: 1.0.0-collaudo2
       hamlib_branch: "4.7.2"
       artifact_retention_days: 30
 
@@ -25,20 +25,35 @@ jobs:
     needs: windows
     runs-on: ubuntu-latest
     env:
-      NBM_VERSION: 1.0.0-collaudo1
+      NBM_VERSION: 1.0.0-collaudo2
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wsjtx-1.0.0-collaudo1-windows-x86_64-installer
+          name: wsjtx-1.0.0-collaudo2-windows-x86_64-installer
           path: out
       - name: Draft release (owner only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -la out
+          cat > notes.md <<'NOTE'
+          Versione di collaudo, solo per IC8TEM. Base WSJT-X 3.3.0-beta8 (K1JT e WSJT Development Group, GPLv3).
+
+          Novita' rispetto a collaudo1:
+          - FT8: decoder multithread (JTDX ft8var) di default + passaggio in piu' superldpc (Decodium, GPLv3)
+          - Q65: forma dello spread (Gauss/Lorentz/entrambe) e unione dei bin x2/x4 per spread larghi
+          - Adattamento automatico al computer (CPU, Windows, monitor) e popup di chiusura
+          - Icona NBMODES
+          - Elenco esclusi senza limiti, con call barrati; "Nascondi chi non usa LoTW"
+          - CSV LoTW e CALL3.TXT aggiornati ogni giorno (regole LIVETROPOVHF), locatori mancanti da G7VRD
+          - Decoder adattato alla potenza del PC (menu Decodifica)
+
+          Da collaudare: FT8 e FT4 in HF.
+          NOTE
+          sed -i 's/^          //' notes.md
           for f in out/*.exe; do mv "$f" "out/NBMODES-IC8TEM-${NBM_VERSION}-windows-x64-setup.exe"; done
           gh release delete "v${NBM_VERSION}" --repo "${{ github.repository }}" --yes --cleanup-tag 2>/dev/null || true
           gh release create "v${NBM_VERSION}" --repo "${{ github.repository }}" --draft --prerelease \
             --target "${{ github.sha }}" --title "NBMODES-IC8TEM ${NBM_VERSION} (collaudo)" \
-            --notes "Versione di collaudo, solo per IC8TEM. Base WSJT-X 3.3.0-beta8 (K1JT e WSJT Development Group, GPLv3). Collaudare FT8 e FT4 in HF." \
+            --notes-file notes.md \
             out/*.exe

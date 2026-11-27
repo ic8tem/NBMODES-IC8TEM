@@ -42,6 +42,8 @@
 class QHBoxLayout;
 class WaitFeaturesApplicationTestController;
 namespace DecoderIpc {class Session;}
+namespace nbm {class Call3Updater; class G7Locator;}
+#include "NbmDecodeLoad.hpp"
 
 #include "DecodedGridHistory.hpp"
 #include "MultiGeometryWidget.hpp"
@@ -1279,6 +1281,22 @@ private:
   bool    m_decoderDiagAbnormalClear=false;
   bool    m_decoderCompletedSinceStart=false;
   bool    m_closing=false;
+  QAction * m_nbmHideNonLotw {nullptr};   // NBMODES-IC8TEM: nascondi chi non usa LoTW
+  QAction * m_nbmCall3Auto {nullptr};     // NBMODES-IC8TEM: CALL3.TXT e LoTW ogni giorno
+  QTimer * m_nbmDaily {nullptr};
+  nbm::Call3Updater * m_nbmCall3 {nullptr};
+  nbm::G7Locator * m_nbmG7 {nullptr};
+  bool m_nbmCall3Interactive {false};
+  bool nbmIsLotwUser (QString const& call) const;
+  void nbmEditIgnoreList ();
+  void nbmUpdateCall3 (bool interactive);
+  void nbmDailyUpdates ();
+  QAction * m_nbmAdaptLoad {nullptr};      // NBMODES-IC8TEM: adatta il decoder alla potenza del PC
+  nbm::DecodeLoadGovernor m_nbmLoad;
+  bool nbmAdaptActive () const;
+  bool nbmUsesFt8Mtd () const;
+  void nbmObserveDecodeTime (QString const& mode, qint64 elapsedMs, double trPeriod);
+  bool    m_nbmExitConfirmed=false;  // NBMODES-IC8TEM: chiusura gia' confermata (o chiesta via UDP)
   bool    m_txFirst;
   bool    m_tx1_enabled_preference {true};
   bool    m_auto;

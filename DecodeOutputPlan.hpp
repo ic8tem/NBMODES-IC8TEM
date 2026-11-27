@@ -128,6 +128,11 @@ namespace DecodeOutputPlan
     bool hideAntarctica {false};
     bool hideIgnored {false};
     QString ignoreList;
+    // NBMODES-IC8TEM: nasconde chi non risulta su LoTW (entro i giorni impostati);
+    // non nasconde mai i messaggi che cominciano con il proprio nominativo.
+    bool hideNonLotw {false};
+    QString myCall;
+    std::function<bool (QString const& deCall)> isLotwUser;
     bool hideWorkedToday {false};
     bool includeYesterday {false};
     QString txLog;

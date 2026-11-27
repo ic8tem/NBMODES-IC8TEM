@@ -1,0 +1,5 @@
+superldpc — decoder LDPC(174,91) di Decodium 4.0 Core Shannon (IU8LMC e collaboratori), GPLv3.
+Fonte: https://github.com/iu8lmc/Decodium-4.0-Core-Shannon, cartella Detector/superldpc, commit 94c6f44 2026-11-25 22:26:21 +0100.
+File copiati senza modifiche: *.hpp, decodium_bridge.cpp, decodium_bridge_sse2.cpp, README.md.
+ldpc_tables.cpp: tabelle Mn/Nm/nrw estratte da Detector/FtxLdpc.cpp di Decodium (stesse di WSJT-X).
+nbm_sldpc.cpp: scritto per NBMODES-IC8TEM (scelta AVX2/SSE2 a runtime e innesto nel decoder FT8 multithread).

@@ -59,6 +59,7 @@ subroutine ft8bvar(residual,spectrum,newdat1,nQSOProgress,nfqso,nftx,napwid, &
   real llra(174),llrb(174),llrc(174),llrd(174),llrz(174)
   real qual !ft8md  
   integer*1 message77(77),apmask(174),cw(174),nsmax(8)
+  integer, external :: nbm_sldpc_mode   ! NBMODES-IC8TEM: superldpc (Decodium)
   integer itone(79),ip(1),ka(1),nqsoend(3)
   integer, intent(in) :: nQSOProgress,nfqso,nftx,napwid,nthr,ipass,nft8rxfsens, &
        progress_generation
@@ -2147,6 +2148,9 @@ subroutine ft8bvar(residual,spectrum,newdat1,nQSOProgress,nfqso,nftx,napwid, &
               endif
            endif
            cw=0
+           if(nbm_sldpc_mode().eq.1) then
+             call nbm_sldpc_decode(llrz,apmask,message77,cw,nharderrors,dmin)
+           else
            call bpdecode174_91var(llrz,apmask,max_iterations,message77,cw,        &
                 nharderrors,niterations)
            dmin=0.0
@@ -2167,6 +2171,11 @@ subroutine ft8bvar(residual,spectrum,newdat1,nQSOProgress,nfqso,nftx,napwid, &
 
               call osd174_91var(llrz,apmask,ndeep,message77,cw,nharderrors,dmin, &
                    nthr,progress_generation)
+           endif
+             if(nharderrors.lt.0 .and. nbm_sldpc_mode().eq.2) then
+               dmin=0.0
+               call nbm_sldpc_decode(llrz,apmask,message77,cw,nharderrors,dmin)
+             endif
            endif
            
            nbadcrc=1

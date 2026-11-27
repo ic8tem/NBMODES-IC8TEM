@@ -3,7 +3,7 @@ string (MD5 rig_name "${WORK_DIR}")
 set (rig_name "CTEST-Q65-${rig_name}")
 # Automated runs use Qt's test-mode settings directory and application suffix.
 file (MAKE_DIRECTORY "$ENV{HOME}/.qttest/config" "${WORK_DIR}/tmp")
-set (settings "$ENV{HOME}/.qttest/config/WSJT-X - ${rig_name} - test.ini")
+set (settings "$ENV{HOME}/.qttest/config/NBMODES-IC8TEM - ${rig_name} - test.ini")
 file (WRITE "${settings}" [=[
 [General]
 SubMode_Q65=2

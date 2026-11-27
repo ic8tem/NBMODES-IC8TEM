@@ -16,6 +16,7 @@ program q65sim
   real*4 xnoise(NMAX)                    !Generated random noise
   real*4 dat(NMAX)                       !Generated real data
   complex cdat(NMAX)                     !Generated complex waveform
+  character*8 cshape
   complex cspread(0:NMAX-1)              !Complex amplitude for Rayleigh fading 
   complex z
   real*8 f00,f0,dt,twopi,phi,dphi,baud,fsample,freq
@@ -194,6 +195,9 @@ program q65sim
      enddo
      
      if(fspread.ne.0) then                  !Apply specified Doppler spread
+        ishape=0
+        call get_environment_variable('Q65SIM_SHAPE',cshape)
+        if(cshape(1:1).eq.'g' .or. cshape(1:1).eq.'G') ishape=1
         df=12000.0/nfft
         cspread(0)=1.0
         cspread(nh)=0.
@@ -203,14 +207,24 @@ program q65sim
            x=b*f/fspread
            z=0.
            a=0.
-           if(x.lt.3.0) then                          !Cutoff beyond x=3
+           if(ishape.eq.1) then
+! NBMODES-IC8TEM: Gaussian ("dome") spread with the same B90 as the
+! truncated Lorentzian below (B90 = 0.557*fspread, sigma = B90/3.29)
+              sig_g=0.1693*fspread
+              x=f/sig_g
+              if(x.lt.4.0) a=exp(-0.25*x*x)          !Gaussian amplitude
+              x=0.
+              if(a.eq.0.) x=99.
+           else if(x.lt.3.0) then                     !Cutoff beyond x=3
               a=sqrt(1.111/(1.0+x*x)-0.1)             !Lorentzian amplitude
+           endif
+           if(a.gt.0.) then
               phi1=twopi*rran()                       !Random phase
               z=a*cmplx(cos(phi1),sin(phi1))
            endif
            cspread(i)=z
            z=0.
-           if(x.lt.3.0) then                !Same thing for negative freqs
+           if(a.gt.0.) then                 !Same thing for negative freqs
               phi2=twopi*rran()
               z=a*cmplx(cos(phi2),sin(phi2))
            endif

@@ -291,6 +291,8 @@ public:
   bool pwrBandTxMemory () const;
   bool pwrBandTuneMemory () const;
   LotWUsers const& lotw_users () const;
+  // NBMODES-IC8TEM: riscarica lotw-user-activity.csv se è più vecchio di 'hours' ore
+  bool refresh_lotw_if_stale (int hours);
   Cloudlog const& cloudlog () const;
   DecodeHighlightingModel const& decode_highlighting () const;
   bool highlight_by_mode () const;

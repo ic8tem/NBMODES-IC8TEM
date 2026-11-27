@@ -273,3 +273,8 @@ bool LotWUsers::user (QString const& call) const
     }
   return false;
 }
+
+int LotWUsers::size () const
+{
+  return m_->last_uploaded_.size ();
+}

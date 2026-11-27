@@ -159,6 +159,7 @@
 #include <QFileDialog>
 #include <QDesktopServices>
 #include <QFileInfo>
+#include <QDateTime>
 #include <QListWidget>
 #include <QTextEdit>
 #include <QLabel>
@@ -8423,3 +8424,12 @@ ENUM_QDATASTREAM_OPS_IMPL (Configuration, Type2MsgGen);
 
 ENUM_CONVERSION_OPS_IMPL (Configuration, DataMode);
 ENUM_CONVERSION_OPS_IMPL (Configuration, Type2MsgGen);
+
+// NBMODES-IC8TEM: aggiornamento quotidiano del CSV degli utenti LoTW
+bool Configuration::refresh_lotw_if_stale (int hours)
+{
+  QFileInfo fi {m_->writeable_data_dir_.absoluteFilePath ("lotw-user-activity.csv")};
+  if (fi.exists () && fi.lastModified ().secsTo (QDateTime::currentDateTime ()) < qint64 (hours) * 3600) return false;
+  m_->lotw_users_.load (m_->ui_->LotW_CSV_URL_line_edit->text (), true, true);
+  return true;
+}

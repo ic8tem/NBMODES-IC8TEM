@@ -32,7 +32,7 @@ if (help_text MATCHES "--platform")
 endif ()
 
 run_wsjtx (0 version_text --version)
-if (NOT version_text MATCHES "^WSJT-X [0-9]+\\.[0-9]+")
+if (NOT version_text MATCHES "^NBMODES-IC8TEM [0-9]+\\.[0-9]+")
   message (FATAL_ERROR "--version did not print the name and version to stdout: ${version_text}")
 endif ()
 

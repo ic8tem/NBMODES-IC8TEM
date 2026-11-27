@@ -501,7 +501,7 @@ void MainWindow::readSettings()
   m_ndepth=m_settings->value("NDepth",3).toInt();
 
   //ft8md
-  ui->actionUse_multithreaded_FT8_decoder->setChecked(m_settings->value("MultithreadedFT8decoder", false).toBool());
+  ui->actionUse_multithreaded_FT8_decoder->setChecked(m_settings->value("MultithreadedFT8decoder", true).toBool());
   m_multithreadFT8 = ui->actionUse_multithreaded_FT8_decoder->isChecked();
   dec_data.params.lmultift8 = m_multithreadFT8;
 

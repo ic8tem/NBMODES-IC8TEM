@@ -209,6 +209,9 @@ set (wsjtx_CXXSRCS
   FastDecode.cpp
   widgets/SpecOpLabel.cpp
   widgets/mainwindow.cpp
+  widgets/NbmHostDialogs.cpp
+  widgets/NbmCall3.cpp
+  widgets/NbmG7.cpp
   widgets/mainwindow_band.cpp
   widgets/mainwindow_modes.cpp
   widgets/mainwindow_jtty.cpp
@@ -247,6 +250,8 @@ if (WSJT_ENABLE_TESTS)
 endif ()
 
 set (wsjt_CXXSRCS
+  lib/superldpc/nbm_sldpc.cpp
+  lib/superldpc/ldpc_tables.cpp
   Logger.cpp
   Ft8MtdDecodeScheduler.cpp
   lib/decoder_ipc_control.cpp

@@ -429,6 +429,25 @@ if (WSJT_OPENMP_FORTRAN_AVAILABLE)
   endif ()
 endif ()
 
+# NBMODES-IC8TEM: superldpc (Decodium, GPLv3). Backend AVX2/FMA in una unita' a parte,
+# scelto a runtime da lib/superldpc/nbm_sldpc.cpp; il backend SSE2 e' compilato per la CPU minima.
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  list (APPEND wsjt_CXXSRCS lib/superldpc/decodium_bridge.cpp lib/superldpc/decodium_bridge_sse2.cpp)
+  add_compile_definitions (NBM_SUPERLDPC_X86=1)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if (MINGW)
+      # GCC su Windows non allinea lo stack a 32 byte: l'assemblatore converte le copie AVX allineate
+      # in non allineate, altrimenti il passaggio superldpc puo' andare in crash (GCC bug 54412).
+      set_source_files_properties (lib/superldpc/decodium_bridge.cpp PROPERTIES COMPILE_OPTIONS "-O3;-mavx2;-mfma;-Wa,-muse-unaligned-vector-move")
+    else ()
+      set_source_files_properties (lib/superldpc/decodium_bridge.cpp PROPERTIES COMPILE_OPTIONS "-O3;-mavx2;-mfma")
+    endif ()
+    set_source_files_properties (lib/superldpc/decodium_bridge_sse2.cpp PROPERTIES COMPILE_OPTIONS "-O3")
+  endif ()
+  set_source_files_properties (lib/superldpc/decodium_bridge.cpp lib/superldpc/decodium_bridge_sse2.cpp
+    PROPERTIES COMPILE_DEFINITIONS "SUPERLDPC_HAVE_GATE_WEIGHTS=1")
+endif ()
+
 # build a library of package functionality (without and optionally with OpenMP support)
 add_library (wsjt_cxx STATIC ${wsjt_CSRCS} ${wsjt_CXXSRCS})
 target_link_libraries (wsjt_cxx Boost::log_setup ${LIBM_LIBRARIES})

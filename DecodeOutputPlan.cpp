@@ -1,4 +1,5 @@
 #include "DecodeOutputPlan.hpp"
+#include "NbmCallLists.hpp"
 
 #include "MessageFilter.hpp"
 #include "qt_helpers.hpp"
@@ -365,9 +366,16 @@ namespace DecodeOutputPlan
       decision.filtered = true;
       decision.reason = "geography or worked-before filter";
     }
-    if (!context.bypass && context.hideIgnored && context.ignoreList.contains(deCall + ",")) {
+    if (!context.bypass && context.hideIgnored && nbm_ignore_has(context.ignoreList, deCall)) {
       decision.filtered = true;
       if (decision.reason.isEmpty()) decision.reason = "ignore-list filter";
+    }
+    if (!context.bypass && context.hideNonLotw && context.isLotwUser
+        && !deCall.isEmpty () && !deCall.startsWith ('<')
+        && !(context.myCall.size () && message.message ().startsWith (context.myCall + ' '))
+        && !context.isLotwUser (deCall)) {
+      decision.filtered = true;
+      if (decision.reason.isEmpty()) decision.reason = "non-LoTW filter";
     }
     if (!context.bypass && context.hideWorkedToday) {
       QRegularExpression const today {context.today + ",[0-9][0-9]:[0-9][0-9]:[0-9][0-9]," + deCall + ","};

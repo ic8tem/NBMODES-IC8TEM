@@ -1,5 +1,12 @@
 //---------------------------------------------------------- MainWindow
 #include "mainwindow.h"
+#include "NbmHostDialogs.hpp"
+#include "NbmCallLists.hpp"
+#include "NbmCall3.hpp"
+#include "NbmG7.hpp"
+#include "NbmDecodeLoad.hpp"
+#include <QPlainTextEdit>
+#include <QDialogButtonBox>
 #include "RoundRobinSelection.hpp"
 #include "FastDecode.hpp"
 
@@ -619,7 +626,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
   m_filter {false}, //ft8md
   m_agcc {false}, //ft8md
   m_hint {true}, //ft8md
-  m_multithreadFT8 (false), //ft8md
+  m_multithreadFT8 (true), //ft8md  NBMODES-IC8TEM: decoder FT8 multithread (JTDX) di default
   m_houndMode {false},		//ft8md
   m_commonFT8b {true},		//ft8md
   m_manualDecode (false), //ft8md
@@ -1052,7 +1059,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
         }
     });
   connect (m_messageClient, &MessageClient::reply, this, &MainWindow::replyToCQ);
-  connect (m_messageClient, &MessageClient::close, this, &MainWindow::close);
+  connect (m_messageClient, &MessageClient::close, this, [this] { m_nbmExitConfirmed = true; close (); }); // chiusura via UDP: nessun popup
   connect (m_messageClient, &MessageClient::replay, this, &MainWindow::replayDecodes);
   connect (m_messageClient, &MessageClient::location, this, &MainWindow::locationChange);
   connect (m_messageClient, &MessageClient::halt_tx, [this] (bool auto_only) {
@@ -1177,6 +1184,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
 
   auto resetFt8Backpressure = [this] (QAction *) {
       cancelPendingFt8Decode ("decoder setting changed");
+      m_nbmLoad.reset ();   // NBMODES-IC8TEM: nuove impostazioni dell'utente, si riparte da livello 0
     };
   connect (DepthGroup, &QActionGroup::triggered, this, resetFt8Backpressure);
   connect (FT8CyclesGroup, &QActionGroup::triggered, this, resetFt8Backpressure);
@@ -1909,6 +1917,83 @@ MainWindow::MainWindow(QDir const& temp_directory,
 #endif
   ui->sbToneSpacing->values({10, 15, 20, 25, 30});
   QTimer::singleShot (4000, this, [=] {programStart=false;});
+
+  // NBMODES-IC8TEM: popup di adattamento al computer (solo se il computer o i monitor sono cambiati)
+  // e voce di menu per rivederlo.
+  {
+    auto adapt = new QAction {tr ("Adattamento a questo computer..."), this};
+    connect (adapt, &QAction::triggered, this, [this] { nbm::showHostAdaptation (this, m_settings, true); });
+    ui->menuHelp->addSeparator ();
+    ui->menuHelp->addAction (adapt);
+    QTimer::singleShot (1500, this, [this] { if (m_valid && isVisible ()) nbm::showHostAdaptation (this, m_settings); });
+  }
+
+  // NBMODES-IC8TEM: elenco esclusi modificabile, filtro "non LoTW", CSV LoTW e CALL3.TXT aggiornati ogni giorno
+  {
+    auto menu_of = [this] (QAction * a) -> QMenu * {
+      for (auto * m : findChildren<QMenu *> ()) if (m->actions ().contains (a)) return m;
+      return nullptr;
+    };
+    auto insert_after = [] (QMenu * m, QAction * ref, QAction * a) {
+      auto const acts = m->actions ();
+      auto const i = acts.indexOf (ref);
+      if (i >= 0 && i + 1 < acts.size ()) m->insertAction (acts[i + 1], a); else m->addAction (a);
+    };
+    m_nbmHideNonLotw = new QAction {tr ("Nascondi chi non usa LoTW"), this};
+    m_nbmHideNonLotw->setCheckable (true);
+    m_nbmHideNonLotw->setToolTip (tr ("Nasconde i nominativi che non hanno caricato su LoTW entro i giorni impostati "
+                                      "(Impostazioni › Colori). Chi chiama te resta sempre visibile."));
+    m_nbmHideNonLotw->setChecked (m_settings->value ("NBM/HideNonLotw", false).toBool ());
+    connect (m_nbmHideNonLotw, &QAction::toggled, this, [this] (bool on) { m_settings->setValue ("NBM/HideNonLotw", on); });
+    if (auto * m = menu_of (ui->actionHideIgnored)) insert_after (m, ui->actionHideIgnored, m_nbmHideNonLotw);
+
+    auto edit = new QAction {tr ("Modifica elenco esclusi..."), this};
+    connect (edit, &QAction::triggered, this, &MainWindow::nbmEditIgnoreList);
+    auto call3_now = new QAction {tr ("Aggiorna CALL3.TXT adesso"), this};
+    connect (call3_now, &QAction::triggered, this, [this] { nbmUpdateCall3 (true); });
+    m_nbmCall3Auto = new QAction {tr ("Aggiorna CALL3.TXT e LoTW ogni giorno"), this};
+    m_nbmCall3Auto->setCheckable (true);
+    m_nbmCall3Auto->setChecked (m_settings->value ("NBM/DailyUpdates", true).toBool ());
+    connect (m_nbmCall3Auto, &QAction::toggled, this, [this] (bool on) { m_settings->setValue ("NBM/DailyUpdates", on); });
+    if (auto * m = menu_of (ui->actionErase_Ignore_List))
+      {
+        insert_after (m, ui->actionErase_Ignore_List, m_nbmCall3Auto);
+        insert_after (m, ui->actionErase_Ignore_List, call3_now);
+        insert_after (m, ui->actionErase_Ignore_List, edit);
+      }
+
+    m_nbmAdaptLoad = new QAction {tr ("Adatta il decoder alla potenza del PC"), this};
+    m_nbmAdaptLoad->setCheckable (true);
+    m_nbmAdaptLoad->setToolTip (tr ("Misura quanto dura ogni decodifica: se il PC non ce la fa nel tempo utile riduce da solo "
+                                    "sensibilità, cicli o profondità, e li rialza quando c'è margine. Le tue impostazioni non cambiano."));
+    m_nbmAdaptLoad->setChecked (m_settings->value ("NBM/AdaptDecodeLoad", true).toBool ());
+    connect (m_nbmAdaptLoad, &QAction::toggled, this, [this] (bool on) {
+        m_settings->setValue ("NBM/AdaptDecodeLoad", on);
+        m_nbmLoad.reset ();
+        showStatusMessage (on ? tr ("Adattamento del decoder al PC attivo") : tr ("Adattamento del decoder al PC spento: valgono le tue impostazioni"));
+      });
+    if (auto * m = menu_of (ui->actionDeepestDecode)) {m->addSeparator (); m->addAction (m_nbmAdaptLoad);}
+
+    {
+      QDir data {QStandardPaths::writableLocation (QStandardPaths::DataLocation)};
+      m_nbmG7 = new nbm::G7Locator {&m_network_manager, data.absoluteFilePath ("CALL3.TXT"), this};
+      m_nbmG7->canWrite = [this] { return !(m_nbmCall3 && m_nbmCall3->busy ()); };
+      auto g7 = new QAction {tr ("Completa i locatori mancanti con G7VRD"), this};
+      g7->setCheckable (true);
+      g7->setToolTip (tr ("Per i nominativi decodificati che in CALL3.TXT mancano o hanno solo 4 caratteri chiede il "
+                          "locatore a 6 caratteri all'API pubblica di G7VRD (al massimo 40 al minuto, una volta al giorno "
+                          "per nominativo) e lo scrive in CALL3.TXT."));
+      g7->setChecked (m_settings->value ("NBM/G7VRD", true).toBool ());
+      m_nbmG7->setEnabled (g7->isChecked ());
+      connect (g7, &QAction::toggled, this, [this] (bool on) { m_settings->setValue ("NBM/G7VRD", on); m_nbmG7->setEnabled (on); });
+      if (auto * m = menu_of (ui->actionErase_Ignore_List)) insert_after (m, m_nbmCall3Auto, g7);
+    }
+
+    m_nbmDaily = new QTimer {this};
+    connect (m_nbmDaily, &QTimer::timeout, this, &MainWindow::nbmDailyUpdates);
+    m_nbmDaily->start (60 * 60 * 1000);
+    QTimer::singleShot (20000, this, &MainWindow::nbmDailyUpdates);
+  }
 
 // this must be the last statement of constructor
   runtime_initialize.finish ();
@@ -3080,19 +3165,24 @@ void MainWindow::fastSink(qint64 frames)
     if (filterResult.shouldReturn) return;
 
     // hide or ignore callsigns for MSK144
-    if (ui->actionHideIgnored->isChecked() or ui->actionHideToday->isChecked() or ui->actionIgnoreIgnored->isChecked() or ui->actionIgnoreToday->isChecked()) {
+    if (ui->actionHideIgnored->isChecked() or ui->actionHideToday->isChecked() or ui->actionIgnoreIgnored->isChecked() or ui->actionIgnoreToday->isChecked()
+        or (m_nbmHideNonLotw && m_nbmHideNonLotw->isChecked ())) {
         QString today = QDateTime::currentDateTimeUtc().toString ("yyyy-MM-dd");
         QString yesterday = QDateTime::currentDateTimeUtc().addDays(-1).toString ("yyyy-MM-dd");
         QString deCall;
         QString deGrid;
         decodedtext.deCallAndGrid(/*out*/deCall,deGrid);
-        if (ui->actionHideIgnored->isChecked() && !ui->cbBypass->isChecked() && ignoreList.contains(deCall + ",")) filtered = true;
+        if (ui->actionHideIgnored->isChecked() && !ui->cbBypass->isChecked() && nbm_ignore_has(ignoreList, deCall)) filtered = true;
+        if (m_nbmHideNonLotw && m_nbmHideNonLotw->isChecked () && !ui->cbBypass->isChecked ()
+            && !deCall.isEmpty () && !deCall.startsWith ('<')
+            && !decodedtext.string ().contains (' ' + m_config.my_callsign () + ' ')
+            && !nbmIsLotwUser (deCall)) filtered = true;
         if (ui->actionHideToday->isChecked() && !ui->cbBypass->isChecked() && (
               txLog.contains(QRegularExpression{today + ",[0-9][0-9]:[0-9][0-9]:[0-9][0-9]," + (deCall + ",")})
               or (m_config.twoDays() && txLog.contains(QRegularExpression{yesterday + ",[0-9][0-9]:[0-9][0-9]:[0-9][0-9]," + (deCall + ",")})))) {
            filtered = true;
         }
-        if (ui->actionIgnoreIgnored->isChecked() && ignoreList.contains(deCall + ",")) {
+        if (ui->actionIgnoreIgnored->isChecked() && nbm_ignore_has(ignoreList, deCall)) {
           ignored = true;
           m_muted = true;
         }
@@ -3155,7 +3245,7 @@ void MainWindow::fastSink(qint64 frames)
         }
 
         // mute audible alerts when callsign is on the Ignored List for MSK144
-        if (m_config.alert_Enabled() && !ui->cbBypass->isChecked() && deCall!="" && ignoreList.contains(deCall + ",")) m_muted = true;
+        if (m_config.alert_Enabled() && !ui->cbBypass->isChecked() && deCall!="" && nbm_ignore_has(ignoreList, deCall)) m_muted = true;
 
         // insert blank line for MSK144
         int ntime=6;
@@ -3287,7 +3377,7 @@ void MainWindow::fastSink(qint64 frames)
               or (m_config.twoDays() && txLog.contains(QRegularExpression{yesterday + ",[0-9][0-9]:[0-9][0-9]:[0-9][0-9]," + (deCall + ",")})))) {
            ui->decodedTextBrowser->highlight_callsign(deCall, QColor(100,100,100), QColor(255,255,0), true);
         }
-        if (ui->actionHighlightIgnored->isChecked() && ignoreList.contains(deCall + ",")) {
+        if (ui->actionHighlightIgnored->isChecked() && nbm_ignore_has(ignoreList, deCall)) {
            ui->decodedTextBrowser->highlight_callsign(deCall, QColor(85,0,0), QColor(255,255,0), true);
         }
         // search for country names
@@ -4664,6 +4754,12 @@ void MainWindow::paintEvent (QPaintEvent * event)
 
 void MainWindow::closeEvent(QCloseEvent * e)
 {
+  // NBMODES-IC8TEM: popup di chiusura come in YAEC e YA-NEC, solo per le chiusure chieste dall'utente.
+  if (!m_closing && !m_nbmExitConfirmed && m_valid && isVisible () && nbm::interactiveSession ())
+    {
+      if (!nbm::confirmExit (this)) { e->ignore (); return; }
+      m_nbmExitConfirmed = true;
+    }
   cancelRigTune ();
   if (jttyDrainInProgress()) { closeAfterJttyDrain(); e->ignore(); return; }
   if (m_closing) { e->accept(); return; }
@@ -4688,6 +4784,8 @@ void MainWindow::closeEvent(QCloseEvent * e)
     PerformanceTrace::Phase settings_write {"mainwindow.settings_write"};
     writeSettings ();
   }
+  // NBMODES-IC8TEM: i locatori trovati su G7VRD entrano in CALL3.TXT anche alla chiusura
+  if (m_nbmG7 && !m_nbmG7->writing () && !(m_nbmCall3 && m_nbmCall3->busy ())) m_nbmG7->flushNow ();
   if(m_astroWidget) m_astroWidget.reset ();
   if(m_QSYMessageCreatorWidget) {
     QCloseEvent closeEvent;
@@ -5540,6 +5638,9 @@ void MainWindow::decode (Ft8MtdDecodeCoordinator::Stage ft8Stage,
   dec_data.params.nfqso=m_wideGraph->rxFreq();
   dec_data.params.nftx = ui->TxFreqSpinBox->value ();
   qint32 depth {m_ndepth};
+  // NBMODES-IC8TEM: profondità ridotta se il PC non ce la fa (FT4 e FT8 a un solo thread)
+  if (nbmAdaptActive () && !nbmUsesFt8Mtd () && ("FT4" == m_mode || "FT8" == m_mode))
+    depth = (depth & ~7) | nbm::depth_at (depth & 7, m_nbmLoad.level ());
   if (!ui->actionInclude_averaging->isVisible ()) depth &= ~16;
   if (!ui->actionInclude_correlation->isVisible ()) depth &= ~32;
   if (!ui->actionEnable_AP_DXcall->isVisible ()) depth &= ~64;
@@ -5652,11 +5753,15 @@ void MainWindow::decode (Ft8MtdDecodeCoordinator::Stage ft8Stage,
     } else {
       dec_data.params.nft8cycles=m_nFT8Cycles;
     }
+    // NBMODES-IC8TEM: cicli e sensibilità effettivi secondo il carico del PC
+    auto const nbmWork = nbmAdaptActive () ? nbm::ft8_work_at (m_nFT8Cycles, m_ft8Sensitivity, m_nbmLoad.level ())
+                                           : nbm::Ft8Work {m_nFT8Cycles, m_ft8Sensitivity};
+    dec_data.params.nft8cycles = std::min<int> (dec_data.params.nft8cycles, nbmWork.cycles);
     if(m_houndMode) { dec_data.params.nft8rxfsens=1; } else { dec_data.params.nft8rxfsens=m_nFT8RXfSens; }
     dec_data.params.nft4depth=m_nFT4depth;
-    if(m_ft8Sensitivity==1) dec_data.params.lft8lowth=false;
+    if(nbmWork.sensitivity==1) dec_data.params.lft8lowth=false;
     else  dec_data.params.lft8lowth=true;
-    if(m_ft8Sensitivity==3) dec_data.params.lft8subpass=true;
+    if(nbmWork.sensitivity==3) dec_data.params.lft8subpass=true;
     else dec_data.params.lft8subpass=false;
     dec_data.params.ltxing=(m_auto && (QDateTime::currentMSecsSinceEpoch()-m_mslastTX) < 26000) ? 1 : 0;  // ft8mdwas ( m_enableTx and jtdxTime etc.
     dec_data.params.lhideft8dupes=ui->actionHide_FT8_dupe_messages->isChecked() ? 1 : 0; //ft8md ui->actionHide_FT8_dupe_messages->isChecked() ? 1 : 0;
@@ -6827,6 +6932,10 @@ void MainWindow::finishDecoderDiagnostic()
 
   auto const now = QDateTime::currentDateTimeUtc();
   auto const elapsedMs = decoderDiagnosticElapsedMs();
+  // NBMODES-IC8TEM: solo le decodifiche finali dal vivo misurano il carico
+  if (!m_decoderDiagAbnormalClear && m_decoderDiagStartNewdat && !m_decoderDiagStartNdiskdat
+      && !m_decoderDiagStartNagain && m_decoderDiagStartIhsym == m_decoderDiagStartHsymStop)
+    nbmObserveDecodeTime (m_decoderDiagStartMode, elapsedMs, m_decoderDiagStartTRperiod);
   auto const lastSample = m_decoderDiagLastSampleUtc.value(m_decoderDiagStartMode);
   auto const delayed = m_decoderDiagBusyRequestLogged || m_decoderDiagOverrunLogged || m_decoderDiagHardHangLogged;
   if(!m_decoderDiagAbnormalClear && delayed) {
@@ -17020,6 +17129,12 @@ DecodedMessageReaction::ReactionDisposition MainWindow::processWaitReplyCall(
 bool MainWindow::applyFiltering(const DecodedText& decodedtext, bool& filtered,
                                  DecodeClassification const * classification)
 {
+  if (m_nbmG7 && !m_diskData)        // NBMODES-IC8TEM: locatori mancanti da G7VRD
+    {
+      QString deCall, deGrid;
+      decodedtext.deCallAndGrid (deCall, deGrid);
+      m_nbmG7->request (deCall);
+    }
   auto const decision = decodeFilterDecision (decodedtext, filtered, classification);
   filtered = decision.filtered;
   if (decision.resetPounceScores) m_autoRespondScores.reset ();
@@ -17069,6 +17184,9 @@ DecodeOutputPlan::KeywordFilterDecision MainWindow::decodeFilterDecision (
   visibilityContext.hideAntarctica = ui->actionHideAN->isChecked();
   visibilityContext.hideIgnored = ui->actionHideIgnored->isChecked();
   visibilityContext.ignoreList = ignoreList;
+  visibilityContext.hideNonLotw = m_nbmHideNonLotw && m_nbmHideNonLotw->isChecked ();
+  visibilityContext.myCall = m_config.my_callsign ();
+  visibilityContext.isLotwUser = [this] (QString const& call) { return nbmIsLotwUser (call); };
   visibilityContext.hideWorkedToday = ui->actionHideToday->isChecked();
   visibilityContext.includeYesterday = m_config.twoDays();
   visibilityContext.txLog = txLog;
@@ -17130,7 +17248,7 @@ void MainWindow::completeBestSP (quint64 backendRequest)
       if (!facts.worked || facts.sender == m_config.my_callsign ()) return {};
       auto const filters = decodeFilterDecision (message, false, &facts);
       if (!filters.continueProcessing || filters.filtered) return {};
-      if (ui->actionIgnoreIgnored->isChecked () && ignoreList.contains (facts.sender + ',')) return {};
+      if (ui->actionIgnoreIgnored->isChecked () && nbm_ignore_has (ignoreList, facts.sender)) return {};
       if (ui->actionIgnoreB4->isChecked () && !ui->cbBypass->isChecked ()
           && facts.workedOnBand && facts.workedOnBand->call) return {};
       if (ui->actionIgnoreToday->isChecked ())
@@ -17181,7 +17299,7 @@ void MainWindow::applyHighlighting(const DecodedText& decodedtext, DisplayText *
           or (m_config.twoDays() && txLog.contains(QRegularExpression{yesterday + ",[0-9][0-9]:[0-9][0-9]:[0-9][0-9]," + (deCall + ",")})))) {
         decodePane->highlight_callsign(deCall, QColor(100,100,100), QColor(255,255,0), true);
       }
-      if (ui->actionHighlightIgnored->isChecked() && ignoreList.contains(deCall + ",")) {
+      if (ui->actionHighlightIgnored->isChecked() && nbm_ignore_has(ignoreList, deCall)) {
         decodePane->highlight_callsign(deCall, QColor(85,0,0), QColor(255,255,0), true);
       }
       if (ui->actionHighlightTerritory1->isChecked() or ui->actionHighlightTerritory2->isChecked() or
@@ -17565,4 +17683,142 @@ void MainWindow::set_mode_from_command_line(const QString& mode, bool lock_mode)
         m_modeLocked = true;
         updateModeControlLock ();
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// NBMODES-IC8TEM: esclusioni, LoTW e CALL3.TXT
+
+bool MainWindow::nbmIsLotwUser (QString const& call) const
+{
+  auto const& lotw = m_config.lotw_users ();
+  if (!lotw.size ()) return true;            // elenco non ancora caricato: non nascondere nessuno
+  return lotw.user (call) || lotw.user (Radio::base_callsign (call));
+}
+
+void MainWindow::nbmEditIgnoreList ()
+{
+  read_ignoreList ();
+  QStringList calls;
+  for (auto const& e : ignoreList.split (QRegularExpression {"[,\\s]+"}, SkipEmptyParts)) calls << e.trimmed ().toUpper ();
+  calls.removeDuplicates ();
+  QDialog dlg {this};
+  dlg.setWindowTitle (tr ("Elenco esclusi"));
+  auto * lay = new QVBoxLayout {&dlg};
+  auto * info = new QLabel {tr ("Un nominativo per riga. Puoi aggiungere, togliere o incollare un elenco: "
+                                "valgono anche virgole e spazi come separatori. Il confronto è esatto "
+                                "(escludendo K1ABC non sparisce WK1ABC). Senza limite di lunghezza. "
+                                "Sono ammessi i nominativi barrati: IC8TEM esclude anche IC8TEM/P e F/IC8TEM, "
+                                "IC8TEM/P esclude solo IC8TEM/P."), &dlg};
+  info->setWordWrap (true);
+  auto * ed = new QPlainTextEdit {&dlg};
+  ed->setPlainText (calls.join ('\n'));
+  ed->setFont (QFont {"Courier New", font ().pointSize ()});
+  auto * bb = new QDialogButtonBox {QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg};
+  bb->button (QDialogButtonBox::Ok)->setText (tr ("Salva"));
+  bb->button (QDialogButtonBox::Cancel)->setText (tr ("Annulla"));
+  connect (bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+  connect (bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+  lay->addWidget (info);
+  lay->addWidget (ed, 1);
+  lay->addWidget (bb);
+  dlg.resize (360, 420);
+  if (dlg.exec () != QDialog::Accepted) return;
+  QStringList out;
+  for (auto const& e : ed->toPlainText ().split (QRegularExpression {"[,;\\s]+"}, SkipEmptyParts))
+    {
+      auto const c = e.trimmed ().toUpper ();
+      if (!c.isEmpty () && !out.contains (c)) out << c;
+    }
+  QFile f {writable_file_path (m_config.writeable_data_dir (), "ignore.list")};
+  ensure_parent_directory (f.fileName ());
+  if (f.open (QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+    {
+      QTextStream ts {&f};
+      for (auto const& c : out) ts << c << ",\n";
+      f.close ();
+    }
+  ignoreList.clear ();
+  read_ignoreList ();
+  showStatusMessage (tr ("Elenco esclusi: %1 nominativi").arg (out.size ()));
+}
+
+void MainWindow::nbmUpdateCall3 (bool interactive)
+{
+  if (!m_nbmCall3)
+    {
+      QDir data {QStandardPaths::writableLocation (QStandardPaths::DataLocation)};
+      m_nbmCall3 = new nbm::Call3Updater {&m_network_manager, data.absoluteFilePath ("CALL3.TXT"), this};
+      connect (m_nbmCall3, &nbm::Call3Updater::finished, this, [this] (bool ok, QString const& summary) {
+          if (ok) m_settings->setValue ("NBM/Call3Last", QDateTime::currentDateTimeUtc ());
+          if (ok && m_nbmG7) m_nbmG7->reloadIndex ();
+          m_config.read_CALL3_version ();
+          showStatusMessage ((ok ? tr ("CALL3.TXT aggiornato: ") : tr ("CALL3.TXT non aggiornato: ")) + summary);
+          if (m_nbmCall3Interactive)
+            {
+              if (ok) MessageBox::information_message (this, tr ("CALL3.TXT aggiornato"), summary);
+              else MessageBox::warning_message (this, tr ("CALL3.TXT non aggiornato"), summary);
+            }
+        });
+    }
+  if (m_nbmCall3->busy ()) return;
+  if (m_nbmG7 && m_nbmG7->writing ())     // G7VRD sta scrivendo CALL3.TXT: si riprova fra poco
+    {
+      QTimer::singleShot (30000, this, [this, interactive] { nbmUpdateCall3 (interactive); });
+      return;
+    }
+  m_nbmCall3Interactive = interactive;
+  showStatusMessage (tr ("Aggiornamento di CALL3.TXT in corso..."));
+  m_nbmCall3->start ();
+}
+
+void MainWindow::nbmDailyUpdates ()
+{
+  if (!m_nbmCall3Auto || !m_nbmCall3Auto->isChecked ()) return;
+  m_config.refresh_lotw_if_stale (24);
+  auto const last = m_settings->value ("NBM/Call3Last").toDateTime ();
+  if (!last.isValid () || last.secsTo (QDateTime::currentDateTimeUtc ()) > 24 * 3600) nbmUpdateCall3 (false);
+}
+
+// NBMODES-IC8TEM: adattamento del decoder alla potenza del PC
+
+bool MainWindow::nbmAdaptActive () const
+{
+  return m_nbmAdaptLoad && m_nbmAdaptLoad->isChecked () && !m_diskData;
+}
+
+bool MainWindow::nbmUsesFt8Mtd () const
+{
+  return "FT8" == m_mode && m_multithreadFT8;
+}
+
+void MainWindow::nbmObserveDecodeTime (QString const& mode, qint64 elapsedMs, double trPeriod)
+{
+  if (!m_nbmAdaptLoad || !m_nbmAdaptLoad->isChecked ()) return;
+  if (mode != m_mode || ("FT8" != mode && "FT4" != mode)) return;
+  bool const mtd = nbmUsesFt8Mtd ();
+  int const maxLevel = mtd ? nbm::ft8_max_level (m_nFT8Cycles, m_ft8Sensitivity)
+                           : nbm::depth_max_level (m_ndepth & 7);
+  auto const budget = nbm::decode_budget_ms (trPeriod);
+  int const before = m_nbmLoad.level ();
+  if (!m_nbmLoad.observe (elapsedMs, budget, maxLevel)) return;
+  int const level = m_nbmLoad.level ();
+  QString what;
+  if (mtd)
+    {
+      auto const w = nbm::ft8_work_at (m_nFT8Cycles, m_ft8Sensitivity, level);
+      what = tr ("cicli %1, sensibilità %2").arg (w.cycles).arg (w.sensitivity);
+    }
+  else
+    {
+      static char const * const names[] = {"", "Quick", "Medium", "Deep"};
+      what = tr ("profondità %1").arg (names[nbm::depth_at (m_ndepth & 7, level)]);
+    }
+  auto const secs = QLocale {}.toString (elapsedMs / 1000., 'f', 1);
+  QString msg;
+  if (level == 0) msg = tr ("Decoder di nuovo alle tue impostazioni (ultima decodifica %1 s)").arg (secs);
+  else if (level > before) msg = tr ("PC al limite (decodifica %1 s su %2 s utili): decoder ridotto a %3")
+                                   .arg (secs, QLocale {}.toString (budget / 1000., 'f', 1), what);
+  else msg = tr ("C'è margine (decodifica %1 s): decoder rialzato a %2").arg (secs, what);
+  qInfo () << "NBM decode load level" << before << "->" << level << "elapsedMs:" << elapsedMs << "budgetMs:" << budget;
+  showStatusMessage (msg);
 }
