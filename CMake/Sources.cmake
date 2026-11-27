@@ -211,6 +211,8 @@ set (wsjtx_CXXSRCS
   widgets/mainwindow.cpp
   widgets/NbmHostDialogs.cpp
   widgets/NbmGpu.cpp
+  widgets/NbmTheme.cpp
+  widgets/NbmStrips.cpp
   widgets/NbmCall3.cpp
   widgets/NbmG7.cpp
   widgets/mainwindow_band.cpp

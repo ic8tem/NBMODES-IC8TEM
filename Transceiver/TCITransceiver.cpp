@@ -33,8 +33,8 @@
 
 namespace
 {
-  char const * const TCI_transceiver_1_name {"TCI Client RX1"};
-  char const * const TCI_transceiver_2_name {"TCI Client RX2"};
+  char const * const TCI_transceiver_1_name {"TCI-client1"};   // NBMODES-IC8TEM: due configurazioni TCI
+  char const * const TCI_transceiver_2_name {"TCI-client2"};
   // Exactly 1 MHz remains within the current band.
   quint64 constexpr band_change_threshold_hz {1000000u};
 
@@ -343,6 +343,18 @@ int TCITransceiver::do_start ()
   CAT_TRACE ("TCITransceiver entered TCI do_start and tci_Ready is " + QString::number(tci_Ready) + '\n');
   qDebug () << "qDebug says do_start tci_Ready is: " << tci_Ready;
   if (wrapped_) wrapped_->start (0);
+  // NBMODES-IC8TEM: "host:porta#N" sceglie il ricevitore N (1, 2...) dell'SDR; senza #N vale
+  // RX1 per TCI-client1 e RX2 per TCI-client2, come prima.
+  {
+    auto const hash = server_.lastIndexOf ('#');
+    if (hash >= 0)
+      {
+        bool ok = false;
+        auto const n = server_.mid (hash + 1).trimmed ().toInt (&ok);
+        if (ok && n >= 1) rx_ = QString::number (n - 1);
+        server_ = server_.left (hash).trimmed ();
+      }
+  }
   url_.setUrl("ws://" + server_);
   if (url_.host() == "") url_.setHost("localhost");
   if (url_.port() == -1) url_.setPort(40001);

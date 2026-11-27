@@ -1057,6 +1057,8 @@ private:
   bool rig_ranges_fixed_ {false};      // tests only: ranges set by hand
   bool rig_range_override_ {false};    // FreqCal's "Ignore range" box
   bool is_tci_;
+  QString tci_ports_[2];   // NBMODES-IC8TEM: indirizzo di TCI-client1 e TCI-client2
+  int tci_client_index (QString const& rig) const {return rig.endsWith ('2') ? 1 : 0;}
   bool rig_active_;
   bool tx_inhibit_active_ {false};
   bool tx_inhibit_status_forwarded_ {false};
@@ -3934,6 +3936,12 @@ void Configuration::impl::read_settings ()
   rig_is_dummy_ = TransceiverFactory::basic_transceiver_name_ == rig_params_.rig_name;
   is_tci_ = rig_params_.rig_name.startsWith("TCI Cli");
   rig_params_.tci_port = settings_->value ("CATTCIPort","").toString ();
+  // NBMODES-IC8TEM: nomi nuovi delle radio TCI e un indirizzo per ciascuna
+  if (rig_params_.rig_name == "TCI Client RX1") rig_params_.rig_name = "TCI-client1";
+  if (rig_params_.rig_name == "TCI Client RX2") rig_params_.rig_name = "TCI-client2";
+  tci_ports_[0] = settings_->value ("CATTCIPort1", rig_params_.tci_port).toString ();
+  tci_ports_[1] = settings_->value ("CATTCIPort2", rig_params_.tci_port).toString ();
+  if (rig_params_.rig_name.startsWith ("TCI-client")) rig_params_.tci_port = tci_ports_[tci_client_index (rig_params_.rig_name)];
   rig_params_.network_port = settings_->value ("CATNetworkPort").toString ();
   rig_params_.usb_port = settings_->value ("CATUSBPort").toString ();
   rig_params_.serial_port = settings_->value ("CATSerialPort").toString ();
@@ -4184,6 +4192,8 @@ void Configuration::impl::write_settings ()
   settings_->setValue ("RxBandwidth", RxBandwidth_);
   settings_->setValue ("TCIAudio", tci_audio_);
   settings_->setValue ("CATTCIPort", rig_params_.tci_port);
+  settings_->setValue ("CATTCIPort1", tci_ports_[0]);
+  settings_->setValue ("CATTCIPort2", tci_ports_[1]);
   settings_->setValue ("PTTMethod", QVariant::fromValue (rig_params_.ptt_type));
   settings_->setValue ("PTTport", rig_params_.ptt_port);
   settings_->setValue ("SaveDir", save_directory_.absolutePath ());
@@ -4395,14 +4405,14 @@ void Configuration::impl::normalize_rig_selections (bool restore)
 
         case TransceiverFactory::Capabilities::tci:
           ui_->CAT_port_combo_box->clear ();
-          ui_->CAT_port_combo_box->setCurrentText (rig_params_.tci_port);
-          ui_->CAT_port_label->setText (tr ("TCI Server:"));
-          ui_->CAT_port_combo_box->setToolTip (tr ("Optional hostname and port of TCI service.\n"
-                                                 "Leave blank for a sensible default on this machine.\n"
-                                                 "Formats:\n"
-                                                 "\thostname:port\n"
-                                                 "\tIPv4-address:port\n"
-                                                 "\t[IPv6-address]:port"));
+          ui_->CAT_port_combo_box->addItems ({"localhost:40001", "localhost:50001", "localhost:40001#2", "localhost:50001#2"});
+          ui_->CAT_port_combo_box->setCurrentText (tci_ports_[tci_client_index (ui_->rig_combo_box->currentText ())]);
+          ui_->CAT_port_label->setText (tr ("Server TCI:"));
+          ui_->CAT_port_combo_box->setToolTip (tr ("Indirizzo e porta del server TCI di questa configurazione.\n"
+                                                 "Vuoto = localhost:40001.\n"
+                                                 "ExpertSDR3 / SunSDR: porta 40001; Thetis: porta 50001.\n"
+                                                 "Aggiungi #2 per usare il secondo ricevitore (es. localhost:40001#2).\n"
+                                                 "TCI-client1 e TCI-client2 ricordano ciascuna il proprio indirizzo."));
           ui_->CAT_port_combo_box->setEnabled (true);
           break;
 
@@ -4778,6 +4788,7 @@ TransceiverFactory::ParameterPack Configuration::impl::gather_rig_data ()
     {
     case TransceiverFactory::Capabilities::tci:
       result.tci_port = ui_->CAT_port_combo_box->currentText ();
+      tci_ports_[tci_client_index (result.rig_name)] = result.tci_port;
       result.network_port = rig_params_.network_port;
       result.usb_port = rig_params_.usb_port;
       result.serial_port = rig_params_.serial_port;

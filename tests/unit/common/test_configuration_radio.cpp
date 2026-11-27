@@ -197,7 +197,7 @@ class TestConfigurationRadio final : public QObject
   bool openFrequencySession ()
   {
     auto& session = *session_;
-    ui ().rig_combo_box->setCurrentText ("TCI Client RX1");
+    ui ().rig_combo_box->setCurrentText ("TCI-client1");
     ui ().CAT_port_combo_box->setEditText (QString {"127.0.0.1:%1"}.arg (session.server.port ()));
     ui ().PTT_CAT_radio_button->setChecked (true);
     ui ().split_rig_radio_button->setChecked (true);

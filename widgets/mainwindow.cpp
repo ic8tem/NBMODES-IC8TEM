@@ -6,8 +6,11 @@
 #include "NbmCall3.hpp"
 #include "NbmG7.hpp"
 #include "NbmGpu.hpp"
+#include "NbmTheme.hpp"
+#include "NbmStrips.hpp"
 #include "NbmDecodeLoad.hpp"
 #include <QPlainTextEdit>
+#include <QScreen>
 #include <QDialogButtonBox>
 #include "RoundRobinSelection.hpp"
 #include "FastDecode.hpp"
@@ -176,6 +179,11 @@
 #include "Network/eqsl.h"
 
 #define FCL fortran_charlen_t
+
+// NBMODES-IC8TEM: stili dei pulsanti di banda e di modo, aggiornati dal tema (vedi applyApplicationStyle)
+static QString g_nbmIdle {"QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}"};
+static QString g_nbmIdleDark {"QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}"};
+static QString g_nbmSel {"QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}"};
 
 extern "C" {
   void sfox_pack_(char* line, char* ckey, bool* more_cqs, bool* send_msg,
@@ -1124,7 +1132,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
   ui->actionJTTY->setActionGroup(modeGroup);
   // NBMODES-IC8TEM: FST4, FST4W e JTTY non sono tra i modi del programma. Restano raggiungibili
   // solo dalle prove automatiche (--test-mode), che verificano il codice comune di WSJT-X.
-  for (auto * a : {ui->actionFST4, ui->actionFST4W, ui->actionJTTY, ui->actionQSG_FST4}) a->setVisible (false);
+  for (auto * a : {ui->actionFST4, ui->actionFST4W, ui->actionJTTY, ui->actionQSG_FST4, ui->actionJT4}) a->setVisible (false);
   ui->actionMSK144->setActionGroup(modeGroup);
   ui->actionQ65->setActionGroup(modeGroup);
   ui->actionFreqCal->setActionGroup(modeGroup);
@@ -2019,6 +2027,37 @@ MainWindow::MainWindow(QDir const& temp_directory,
     connect (m_nbmRamWatch, &QTimer::timeout, this, &MainWindow::nbmRamWatchdog);
     m_nbmRamWatch->start (10000);
 
+    // Barra, fascia dei modi e fascia delle bande dei bozzetti (Main.dc) + menu Vista › Tema
+    if (!QStandardPaths::isTestModeEnabled () || qEnvironmentVariableIsSet ("NBM_TEST_GUI"))
+      {
+        auto * bars = new nbm::TopBars {ui->centralWidget};
+        bars->addModeGroup ({ui->actionFT8, ui->actionFT4, ui->actionQ65, ui->actionJT65, ui->actionJT9});
+        bars->addModeGroup ({ui->actionMSK144});
+        bars->addModeGroup ({ui->actionWSPR, ui->actionEcho});
+        // le bande restano sulla fascia di pulsanti di WSJT-X (160 m ... 70 cm), ora con i colori del tema
+        connect (bars, &nbm::TopBars::openSpectrum, this, &MainWindow::on_actionWide_Waterfall_triggered);
+        connect (bars, &nbm::TopBars::openMsDisplay, this, &MainWindow::on_actionFast_Graph_triggered);
+        ui->verticalLayout_6->insertWidget (0, bars);
+        // schermi piccoli (1366x768 e simili): fascia compatta
+        if (auto * scr = screen ()) bars->setCompact (scr->availableGeometry ().height () < 800);
+      }
+    {
+      auto * sub = ui->menuView->addMenu (tr ("Tema"));
+      auto * grp = new QActionGroup {sub};
+      auto const cur = m_settings->value ("NBM/Theme", nbm::defaultThemeName ()).toString ();
+      for (auto const& name : nbm::themeNames ())
+        {
+          auto * a = sub->addAction (name);
+          a->setCheckable (true);
+          a->setChecked (name == cur);
+          grp->addAction (a);
+          connect (a, &QAction::triggered, this, [this, name] {
+              m_settings->setValue ("NBM/Theme", name);
+              applyApplicationStyle (m_config.text_font (), ui->actionUse_Dark_Style->isChecked ());
+            });
+        }
+    }
+
     m_nbmDaily = new QTimer {this};
     connect (m_nbmDaily, &QTimer::timeout, this, &MainWindow::nbmDailyUpdates);
     m_nbmDaily->start (60 * 60 * 1000);
@@ -2444,8 +2483,28 @@ void MainWindow::applyApplicationStyle (QFont const& font, bool dark)
       darkStyleSheet = stream.readAll ();
     }
 
-  auto const styleSheet = main_window_style_sheet (
-    m_base_style_sheet, darkStyleSheet, dark, font);
+  auto const nbmTheme = (QStandardPaths::isTestModeEnabled () && !qEnvironmentVariableIsSet ("NBM_TEST_GUI")) ? QString {"WSJT-X classico"}
+    : m_settings->value ("NBM/Theme", nbm::defaultThemeName ()).toString ();
+  {
+    auto const c = [&nbmTheme] (char const * v) {return nbm::themeColor (nbmTheme, v);};
+    if (!nbm::themeStyleSheet (nbmTheme).isEmpty ())
+      {
+        g_nbmIdle = QString {"QPushButton {background-color: %1; color: %2; border: 1px solid %3; border-radius: 9px; padding: 3px; outline: none;}"}
+          .arg (c ("pill"), c ("pillfore"), c ("pillborder"));
+        g_nbmIdleDark = g_nbmIdle;
+        g_nbmSel = QString {"QPushButton {background-color: %1; color: %2; border: 0; border-radius: 9px; padding: 3px; outline: none; font-weight: 600;}"}
+          .arg (c ("accent"), c ("accentfore"));
+      }
+    else
+      {
+        g_nbmIdle = QStringLiteral ("QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+        g_nbmIdleDark = QStringLiteral ("QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+        g_nbmSel = QStringLiteral ("QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+      }
+  }
+  auto const styleSheet = nbm::applyThemeTo (main_window_style_sheet (
+    m_base_style_sheet, nbm::themeStyleSheet (nbmTheme).isEmpty () ? darkStyleSheet : QString {},
+    dark && nbm::themeStyleSheet (nbmTheme).isEmpty (), font), nbmTheme);
   if (qApp->font () != font) qApp->setFont (font);
   ui->outAttenuation->setProperty ("wsjtxDarkStyle", dark);
   if (qApp->styleSheet () != styleSheet) qApp->setStyleSheet (styleSheet);
@@ -16374,57 +16433,57 @@ void MainWindow::check_button_color()
 
     if (!m_config.button_coloring_disabled()) {
       if (m_mode=="Q65" && m_config.enable_VHF_features() && m_TRperiod==15 && m_nSubMode==0) {
-          set_style_sheet_if_changed(ui->pb15A, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->pb15A, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-              set_style_sheet_if_changed(ui->pb15A, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb15A, g_nbmIdleDark);
           } else {
-              set_style_sheet_if_changed(ui->pb15A, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb15A, g_nbmIdle);
           }
       }
       if (m_mode=="Q65" && m_config.enable_VHF_features() && m_TRperiod==15 && m_nSubMode==2) {
-          set_style_sheet_if_changed(ui->pb15C, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->pb15C, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-              set_style_sheet_if_changed(ui->pb15C, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb15C, g_nbmIdleDark);
           } else {
-              set_style_sheet_if_changed(ui->pb15C, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb15C, g_nbmIdle);
           }
       }
       if (m_mode=="Q65" && m_config.enable_VHF_features() && m_TRperiod==30 && m_nSubMode==1) {
-          set_style_sheet_if_changed(ui->pb30B, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->pb30B, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-              set_style_sheet_if_changed(ui->pb30B, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb30B, g_nbmIdleDark);
           } else {
-              set_style_sheet_if_changed(ui->pb30B, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb30B, g_nbmIdle);
           }
       }
       if (m_mode=="Q65" && m_config.enable_VHF_features() && m_TRperiod==60 && m_nSubMode==2) {
-          set_style_sheet_if_changed(ui->pb60C, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->pb60C, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->pb60C, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->pb60C, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->pb60C, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->pb60C, g_nbmIdle);
           }
       }
       if (m_mode=="Q65" && m_config.enable_VHF_features() && m_TRperiod==60 && m_nSubMode==3) {
-          set_style_sheet_if_changed(ui->pb60D, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->pb60D, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-              set_style_sheet_if_changed(ui->pb60D, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb60D, g_nbmIdleDark);
           } else {
-              set_style_sheet_if_changed(ui->pb60D, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb60D, g_nbmIdle);
           }
       }
       if (m_mode=="Q65" && m_config.enable_VHF_features() && m_TRperiod==60 && m_nSubMode==4) {
-          set_style_sheet_if_changed(ui->pb60E, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->pb60E, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->pb60E, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->pb60E, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->pb60E, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->pb60E, g_nbmIdle);
           }
       }
       if (ui->houndButton->isChecked() && !m_config.button_coloring_disabled()) {
@@ -16434,64 +16493,64 @@ void MainWindow::check_button_color()
           set_style_sheet_if_changed(ui->houndButton, "QPushButton {background-color: #ffff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
         } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->houndButton, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->houndButton, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->houndButton, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->houndButton, g_nbmIdle);
           }
         }
       }
       if (m_mode=="FT8") {
-          set_style_sheet_if_changed(ui->ft8Button, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->ft8Button, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->ft8Button, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->ft8Button, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->ft8Button, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->ft8Button, g_nbmIdle);
           }
       }
       if (m_mode=="FT4") {
-          set_style_sheet_if_changed(ui->ft4Button, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->ft4Button, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->ft4Button, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->ft4Button, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->ft4Button, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->ft4Button, g_nbmIdle);
           }
       }
       if (m_mode=="MSK144") {
-          set_style_sheet_if_changed(ui->msk144Button, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->msk144Button, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->msk144Button, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->msk144Button, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->msk144Button, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->msk144Button, g_nbmIdle);
           }
       }
       if (m_mode=="Q65") {
-          set_style_sheet_if_changed(ui->q65Button, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->q65Button, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->q65Button, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->q65Button, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->q65Button, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->q65Button, g_nbmIdle);
           }
       }
       if (m_mode=="JT65") {
-          set_style_sheet_if_changed(ui->jt65Button, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->jt65Button, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->jt65Button, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->jt65Button, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->jt65Button, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->jt65Button, g_nbmIdle);
           }
       }
       if (m_mode=="Echo" && ui->echoButton->isVisible()) {
-          set_style_sheet_if_changed(ui->echoButton, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+          set_style_sheet_if_changed(ui->echoButton, g_nbmSel);
       } else {
           if (m_useDarkStyle) {
-             set_style_sheet_if_changed(ui->echoButton, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->echoButton, g_nbmIdleDark);
           } else {
-             set_style_sheet_if_changed(ui->echoButton, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+             set_style_sheet_if_changed(ui->echoButton, g_nbmIdle);
           }
       }
     }
@@ -16539,120 +16598,120 @@ void MainWindow::check_button_color()
           ui->pb10G->setVisible(true);
           ui->pb24G->setVisible(true);
           if (band=="8m") {
-            set_style_sheet_if_changed(ui->pb8, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb8, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb8, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb8, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb8, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb8, g_nbmIdle);
               }
           }
           if (band=="6m") {
-              set_style_sheet_if_changed(ui->pb50, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb50, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb50, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb50, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb50, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb50, g_nbmIdle);
               }
           }
           if (band=="4m") {
-              set_style_sheet_if_changed(ui->pb4, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb4, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb4, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb4, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb4, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb4, g_nbmIdle);
               }
           }
           if (band=="2m") {
-              set_style_sheet_if_changed(ui->pb144, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb144, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb144, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb144, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb144, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb144, g_nbmIdle);
               }
           }
           if (band=="1.25m") {
-              set_style_sheet_if_changed(ui->pb220, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb220, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb220, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb220, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb220, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb220, g_nbmIdle);
               }
           }
           if (band=="70cm") {
-              set_style_sheet_if_changed(ui->pb432, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb432, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb432, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb432, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb432, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb432, g_nbmIdle);
               }
           }
           if (band=="33cm") {
-            set_style_sheet_if_changed(ui->pb902, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb902, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb902, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb902, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb902, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb902, g_nbmIdle);
               }
           }
           if (band=="23cm") {
-            set_style_sheet_if_changed(ui->pb23, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb23, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb23, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb23, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb23, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb23, g_nbmIdle);
               }
           }
           if (band=="13cm") {
-            set_style_sheet_if_changed(ui->pb13, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb13, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb13, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb13, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb13, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb13, g_nbmIdle);
               }
           }
           if (band=="9cm") {
-            set_style_sheet_if_changed(ui->pb9, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb9, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb9, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb9, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb9, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb9, g_nbmIdle);
               }
           }
           if (band=="6cm") {
-            set_style_sheet_if_changed(ui->pb5G, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb5G, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb5G, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb5G, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb5G, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb5G, g_nbmIdle);
               }
           }
           if (band=="3cm") {
-            set_style_sheet_if_changed(ui->pb10G, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb10G, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb10G, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb10G, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb10G, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb10G, g_nbmIdle);
               }
           }
           if (band=="1.25cm") {
-            set_style_sheet_if_changed(ui->pb24G, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb24G, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb24G, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb24G, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb24G, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb24G, g_nbmIdle);
               }
           }
       } else {
@@ -16683,114 +16742,114 @@ void MainWindow::check_button_color()
         ui->pb10G->setVisible(false);
         ui->pb24G->setVisible(false);
         if (band=="160m") {
-            set_style_sheet_if_changed(ui->pb160, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb160, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb160, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb160, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb160, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb160, g_nbmIdle);
             }
         }
         if (band=="80m") {
-            set_style_sheet_if_changed(ui->pb80, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb80, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb80, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb80, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb80, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb80, g_nbmIdle);
             }
         }
         if (band=="60m") {
-            set_style_sheet_if_changed(ui->pb60, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb60, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb60, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb60, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb60, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb60, g_nbmIdle);
             }
         }
         if (band=="40m") {
-            set_style_sheet_if_changed(ui->pb40, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb40, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb40, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb40, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb40, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb40, g_nbmIdle);
             }
         }
         if (band=="30m") {
-            set_style_sheet_if_changed(ui->pb30, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb30, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb30, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb30, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb30, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb30, g_nbmIdle);
             }
         }
         if (band=="20m") {
-            set_style_sheet_if_changed(ui->pb20, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb20, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb20, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb20, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb20, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb20, g_nbmIdle);
             }
         }
         if (band=="17m") {
-            set_style_sheet_if_changed(ui->pb17, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb17, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb17, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb17, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb17, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb17, g_nbmIdle);
             }
         }
         if (band=="15m") {
-            set_style_sheet_if_changed(ui->pb15, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb15, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb15, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb15, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb15, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb15, g_nbmIdle);
             }
         }
         if (band=="12m") {
-            set_style_sheet_if_changed(ui->pb12, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb12, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb12, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb12, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb12, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb12, g_nbmIdle);
             }
         }
         if (band=="10m") {
-            set_style_sheet_if_changed(ui->pb10, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb10, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb10, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb10, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb10, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb10, g_nbmIdle);
             }
         }
         if (band=="6m") {
-            set_style_sheet_if_changed(ui->pb6, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+            set_style_sheet_if_changed(ui->pb6, g_nbmSel);
         } else {
             if (m_useDarkStyle) {
-               set_style_sheet_if_changed(ui->pb6, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb6, g_nbmIdleDark);
             } else {
-               set_style_sheet_if_changed(ui->pb6, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+               set_style_sheet_if_changed(ui->pb6, g_nbmIdle);
             }
         }
         if (band=="4m" or band=="1.25m" ) {
             set_style_sheet_if_changed(ui->pb2, "QPushButton {background-color: #ffff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
         } else {
           if (band=="2m") {
-              set_style_sheet_if_changed(ui->pb2, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb2, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb2, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb2, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb2, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb2, g_nbmIdle);
               }
           }
         }
@@ -16798,12 +16857,12 @@ void MainWindow::check_button_color()
             set_style_sheet_if_changed(ui->pb70, "QPushButton {background-color: #ffff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
         } else {
           if (band=="70cm") {
-              set_style_sheet_if_changed(ui->pb70, "QPushButton {background-color: #00ff00; color: #000000; border: 1px solid #32414B; border-radius: 5px; padding: 3px; outline: none;}");
+              set_style_sheet_if_changed(ui->pb70, g_nbmSel);
           } else {
               if (m_useDarkStyle) {
-                 set_style_sheet_if_changed(ui->pb70, "QPushButton {background-color: #505F69; border: 1px solid #32414B; color: #F0F0F0; border-radius: 4px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb70, g_nbmIdleDark);
               } else {
-                 set_style_sheet_if_changed(ui->pb70, "QPushButton {background-color: #e1e1e1; border: 1px solid #adadad; border-radius: 0px; padding: 3px; outline: none;}");
+                 set_style_sheet_if_changed(ui->pb70, g_nbmIdle);
               }
           }
         }

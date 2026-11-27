@@ -51,6 +51,7 @@
 #include "PerformanceTrace.hpp"
 #include "prerelease_expiry.h"
 #include "revision_utils.hpp"
+#include "widgets/NbmTheme.hpp"
 #include "MetaDataRegistry.hpp"
 #include "qt_helpers.hpp"
 #include "L10nLoader.hpp"
@@ -882,7 +883,8 @@ int main(int argc, char *argv[])
       auto const prerelease_expiration = QDateTime::fromSecsSinceEpoch (WSJT_PRERELEASE_EXPIRY, Qt::UTC);
       bool prerelease_notice_pending = WSJT_PRERELEASE_EXPIRY > 0;
       auto const original_style_sheet = a.styleSheet ();
-      auto const original_font = a.font ();
+      // NBMODES-IC8TEM: carattere Inter al 90% come nei bozzetti (non nelle prove automatiche)
+      auto const original_font = (QStandardPaths::isTestModeEnabled () && !qEnvironmentVariableIsSet ("NBM_TEST_GUI")) ? a.font () : nbm::defaultUiFont (a.font ());
       auto const apply_application_appearance = [&] {
         auto font = original_font;
         if (!font.fromString (multi_settings.settings ()->value (
@@ -891,8 +893,10 @@ int main(int argc, char *argv[])
             font = original_font;
           }
 
+        auto const nbm_theme = (QStandardPaths::isTestModeEnabled () && !qEnvironmentVariableIsSet ("NBM_TEST_GUI")) ? QString {"WSJT-X classico"}
+          : multi_settings.settings ()->value ("NBM/Theme", nbm::defaultThemeName ()).toString ();
         auto const dark_style = multi_settings.settings ()->value (
-          "Common/DarkStyle", false).toBool ();
+          "Common/DarkStyle", false).toBool () && nbm::themeStyleSheet (nbm_theme).isEmpty ();
         QString dark_style_sheet;
         if (dark_style)
           {
@@ -903,8 +907,8 @@ int main(int argc, char *argv[])
               }
           }
 
-        auto const style_sheet = main_window_style_sheet (
-          original_style_sheet, dark_style_sheet, dark_style, font);
+        auto const style_sheet = nbm::applyThemeTo (main_window_style_sheet (
+          original_style_sheet, dark_style_sheet, dark_style, font), nbm_theme);
         if (a.font () != font) a.setFont (font);
         if (a.styleSheet () != style_sheet) a.setStyleSheet (style_sheet);
       };
