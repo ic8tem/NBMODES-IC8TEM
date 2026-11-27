@@ -3,6 +3,8 @@
 // ringraziamento in corsivo, barra grigia con Si' e No).
 #include "NbmHostDialogs.hpp"
 
+#include <QStandardPaths>
+
 #include <QApplication>
 #include <QDialog>
 #include <QFrame>
@@ -126,6 +128,7 @@ namespace nbm
   bool interactiveSession ()
   {
     if (qEnvironmentVariableIsSet ("NBM_NO_EXIT_PROMPT")) return false;
+    if (QStandardPaths::isTestModeEnabled ()) return false;   // --test-mode e prove automatiche: niente finestre modali
     auto const platform = QGuiApplication::platformName ();
     return platform != "offscreen" && platform != "minimal";
   }

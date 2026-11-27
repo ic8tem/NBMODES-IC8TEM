@@ -1984,7 +1984,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
                           "locatore a 6 caratteri all'API pubblica di G7VRD (al massimo 40 al minuto, una volta al giorno "
                           "per nominativo) e lo scrive in CALL3.TXT."));
       g7->setChecked (m_settings->value ("NBM/G7VRD", true).toBool ());
-      m_nbmG7->setEnabled (g7->isChecked ());
+      m_nbmG7->setEnabled (g7->isChecked () && !QStandardPaths::isTestModeEnabled ());
       connect (g7, &QAction::toggled, this, [this] (bool on) { m_settings->setValue ("NBM/G7VRD", on); m_nbmG7->setEnabled (on); });
       if (auto * m = menu_of (ui->actionErase_Ignore_List)) insert_after (m, m_nbmCall3Auto, g7);
     }
@@ -17773,6 +17773,7 @@ void MainWindow::nbmUpdateCall3 (bool interactive)
 
 void MainWindow::nbmDailyUpdates ()
 {
+  if (QStandardPaths::isTestModeEnabled ()) return;          // nelle prove automatiche niente rete
   if (!m_nbmCall3Auto || !m_nbmCall3Auto->isChecked ()) return;
   m_config.refresh_lotw_if_stale (24);
   auto const last = m_settings->value ("NBM/Call3Last").toDateTime ();
