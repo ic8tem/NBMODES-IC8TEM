@@ -1158,7 +1158,9 @@ private:
   bool check_SWR_;
   double degrade_;
   double txDelay_;
-  bool tci_audio_;
+  bool tci_audio_;      // NBMODES: receive audio via TCI
+  bool tci_tx_audio_;   // NBMODES: transmit audio via TCI
+  bool tci_for (QAudio::Mode mode) const {return is_tci_ && (QAudio::AudioInput == mode ? tci_audio_ : tci_tx_audio_);}
   bool id_after_73_;
   bool tx_frequency_corrections_allowed_;
   bool progressBar_red_;
@@ -1332,6 +1334,7 @@ double Configuration::degrade() const {return m_->degrade_;}
 double Configuration::txDelay() const {return m_->txDelay_;}
 qint32 Configuration::RxBandwidth() const {return m_->RxBandwidth_;}
 bool Configuration::tci_audio () const {return m_->tci_audio_;}
+bool Configuration::tci_tx_audio () const {return m_->tci_tx_audio_;}
 bool Configuration::id_after_73 () const {return m_->id_after_73_;}
 bool Configuration::tx_frequency_corrections_allowed () const {return m_->tx_frequency_corrections_allowed_;}
 bool Configuration::progressBar_red () const {return m_->progressBar_red_;}
@@ -2513,6 +2516,14 @@ Configuration::impl::impl (Configuration * self, QNetworkAccessManager * network
   update_rig_invariants_when_checked (ui_->TX_mode_button_group);
   update_rig_invariants_when_checked (ui_->TX_audio_source_button_group);
   connect (ui_->tci_audio_check_box, &QCheckBox::toggled, this, &Configuration::impl::stop_test_ptt);
+  connect (ui_->tci_tx_audio_check_box, &QCheckBox::toggled, this, &Configuration::impl::stop_test_ptt);
+  connect (ui_->tci_tx_audio_check_box, &QCheckBox::clicked, this, [this] (bool checked) {
+      tci_tx_audio_ = checked;
+      load_audio_devices (QAudio::AudioOutput, ui_->sound_output_combo_box, &next_audio_output_device_);
+      next_audio_output_device_ = QAudioDeviceInfo {};
+      find_audio_devices ();
+      if (is_tci_ && checked) ui_->sound_output_channel_combo_box->setCurrentIndex (0);
+    });
   connect (ui_->PWR_and_SWR_check_box, &QCheckBox::toggled, this, &Configuration::impl::stop_test_ptt);
 
   auto set_accessible_line_edit_names = [] (QList<QLineEdit *> const& line_edits,
@@ -2746,6 +2757,7 @@ Configuration::impl::impl (Configuration * self, QNetworkAccessManager * network
     ui_->sound_output_channel_combo_box,
     ui_->refresh_push_button,
     ui_->tci_audio_check_box,
+    ui_->tci_tx_audio_check_box,
     ui_->TCI_spin_box,
     ui_->cbSortAlphabetically,
     ui_->cbHideCARD,
@@ -3432,6 +3444,7 @@ void Configuration::impl::initialize_models ()
   ui_->sbDegrade->setValue (degrade_);
   ui_->sbBandwidth->setValue (RxBandwidth_);
   ui_->tci_audio_check_box->setChecked (tci_audio_);
+  ui_->tci_tx_audio_check_box->setChecked (tci_tx_audio_);
   ui_->PTT_method_button_group->button (rig_params_.ptt_type)->setChecked (true);
   ui_->PWR_and_SWR_check_box->setChecked (PWR_and_SWR_);
   ui_->check_SWR_check_box->setChecked (check_SWR_);
@@ -3813,6 +3826,8 @@ void Configuration::impl::read_settings ()
   azel_directory_.setPath (settings_->value ("AzElDir", default_azel_directory_.absolutePath ()).toString ());
 
   tci_audio_ = settings_->value ("TCIAudio", false).toBool ();
+  // NBMODES: RX and TX TCI audio are chosen separately (as in MSHV); the old single switch covered both.
+  tci_tx_audio_ = settings_->value ("TCIAudioTX", tci_audio_).toBool ();
 
   type_2_msg_gen_ = settings_->value ("Type2MsgGen", QVariant::fromValue (Configuration::type_2_msg_3_full)).value<Configuration::Type2MsgGen> ();
 
@@ -4100,7 +4115,7 @@ void Configuration::impl::find_audio_devices ()
   // retrieve audio input device
   //
   auto saved_name = settings_->value ("SoundInName").toString ();
-  if (is_tci_ && tci_audio_) saved_name = "TCI audio";  // TCI
+  if (tci_for (QAudio::AudioInput)) saved_name = "TCI audio";  // TCI
   if (next_audio_input_device_.deviceName () != saved_name || next_audio_input_device_.isNull ())
     {
       next_audio_input_device_ = find_audio_device (QAudio::AudioInput, ui_->sound_input_combo_box, saved_name);
@@ -4112,7 +4127,7 @@ void Configuration::impl::find_audio_devices ()
   // retrieve audio output device
   //
   saved_name = settings_->value("SoundOutName").toString();
-  if (is_tci_ && tci_audio_) saved_name = "TCI audio";  // TCI
+  if (tci_for (QAudio::AudioOutput)) saved_name = "TCI audio";  // TCI
   if (next_audio_output_device_.deviceName () != saved_name || next_audio_output_device_.isNull ())
     {
       next_audio_output_device_ = find_audio_device (QAudio::AudioOutput, ui_->sound_output_combo_box, saved_name);
@@ -4197,6 +4212,7 @@ void Configuration::impl::write_settings ()
   settings_->setValue ("Aggressive", aggressive_);
   settings_->setValue ("RxBandwidth", RxBandwidth_);
   settings_->setValue ("TCIAudio", tci_audio_);
+  settings_->setValue ("TCIAudioTX", tci_tx_audio_);
   settings_->setValue ("CATTCIPort", rig_params_.tci_port);
   settings_->setValue ("CATTCIPort1", tci_ports_[0]);
   settings_->setValue ("CATTCIPort2", tci_ports_[1]);
@@ -4207,14 +4223,14 @@ void Configuration::impl::write_settings ()
   if (!audio_input_device_.isNull ()) {
       settings_->setValue ("SoundInName", audio_input_device_.deviceName ());
       settings_->setValue ("AudioInputChannel", AudioDevice::toString (audio_input_channel_));
-  } else if (is_tci_ && tci_audio_) {
+  } else if (tci_for (QAudio::AudioInput)) {
     settings_->setValue ("SoundInName", "TCI audio");
     settings_->setValue ("AudioInputChannel", "TCI audio");
   }
   if (!audio_output_device_.isNull ()) {
     settings_->setValue ("SoundOutName", audio_output_device_.deviceName ());
     settings_->setValue ("AudioOutputChannel", AudioDevice::toString (audio_output_channel_));
-  } else if (is_tci_ && tci_audio_) {
+  } else if (tci_for (QAudio::AudioOutput)) {
     settings_->setValue ("SoundOutName", "TCI audio");
     settings_->setValue ("AudioOutputChannel", "TCI audio");
   }
@@ -4479,12 +4495,13 @@ void Configuration::impl::set_rig_invariants ()
   auto asynchronous_CAT = transceiver_factory_.has_asynchronous_CAT (rig);
   is_tci_ = nbm_is_tci_rig (ui_->rig_combo_box->currentText());
   ui_->tci_audio_check_box->setVisible(is_tci_);
+  ui_->tci_tx_audio_check_box->setVisible(is_tci_);
   ui_->TCI_spin_box->setVisible(is_tci_);
 //  ui_->refresh_push_button->setVisible(is_tci_);
-  if (is_tci_ && tci_audio_) {
+  if (is_tci_ && (tci_audio_ || tci_tx_audio_)) {
     find_audio_devices ();
-    ui_->sound_input_channel_combo_box->setCurrentIndex (0);
-    ui_->sound_output_channel_combo_box->setCurrentIndex (0);
+    if (tci_audio_) ui_->sound_input_channel_combo_box->setCurrentIndex (0);
+    if (tci_tx_audio_) ui_->sound_output_channel_combo_box->setCurrentIndex (0);
   }
   ui_->test_CAT_push_button->setStyleSheet ({});
   ui_->CAT_poll_interval_label->setEnabled (!asynchronous_CAT);
@@ -4832,7 +4849,8 @@ TransceiverFactory::ParameterPack Configuration::impl::gather_rig_data ()
   result.rts_high = ui_->force_RTS_combo_box->isEnabled () && 1 == ui_->force_RTS_combo_box->currentIndex ();
   result.poll_interval = ui_->CAT_poll_interval_spin_box->value ();
   if (ui_->PWR_and_SWR_check_box->isChecked ()) result.poll_interval |= do__pwr;
-  if (is_tci_ && ui_->tci_audio_check_box->isChecked ()) result.poll_interval |= tci__audio;
+  if (is_tci_ && (ui_->tci_audio_check_box->isChecked () || ui_->tci_tx_audio_check_box->isChecked ())) result.poll_interval |= tci__audio;
+  if (is_tci_ && ui_->tci_tx_audio_check_box->isChecked ()) result.poll_interval |= tci__txaudio;
   result.ptt_type = static_cast<TransceiverFactory::PTTMethod> (ui_->PTT_method_button_group->checkedId ());
   result.ptt_port = ui_->PTT_port_combo_box->currentText ();
   result.audio_source = static_cast<TransceiverFactory::TXAudioSource> (ui_->TX_audio_source_button_group->checkedId ());
@@ -5034,6 +5052,7 @@ void Configuration::impl::accept ()
   degrade_ = ui_->sbDegrade->value ();
   RxBandwidth_ = ui_->sbBandwidth->value ();
   tci_audio_ = ui_->tci_audio_check_box->isChecked ();
+  tci_tx_audio_ = ui_->tci_tx_audio_check_box->isChecked ();
   id_after_73_ = ui_->CW_id_after_73_check_box->isChecked ();
   tx_frequency_corrections_allowed_ = ui_->tx_frequency_corrections_check_box->isChecked ();
   progressBar_red_ = ui_->progress_bar_check_box->isChecked ();
@@ -6235,11 +6254,10 @@ void Configuration::impl::on_refresh_push_button_clicked ()
 void Configuration::impl::on_tci_audio_check_box_clicked(bool checked)
 {
   tci_audio_ = checked;
-  if (is_tci_ && checked) {
-    find_audio_devices ();
-    ui_->sound_input_channel_combo_box->setCurrentIndex (0);
-    ui_->sound_output_channel_combo_box->setCurrentIndex (0);
-  }
+  load_audio_devices (QAudio::AudioInput, ui_->sound_input_combo_box, &next_audio_input_device_);
+  next_audio_input_device_ = QAudioDeviceInfo {};
+  find_audio_devices ();
+  if (is_tci_ && checked) ui_->sound_input_channel_combo_box->setCurrentIndex (0);
 }
 
 void Configuration::impl::on_TCI_spin_box_valueChanged(double a)
@@ -7437,7 +7455,7 @@ bool Configuration::impl::open_rig (bool force)
     {
       try
         {
-          if (is_tci_ && rig_active_ && tci_audio_) restart_tci_device_ = true;
+          if (is_tci_ && rig_active_ && (tci_audio_ || tci_tx_audio_)) restart_tci_device_ = true;
           // The running footswitch still holds its saved port, which the
           // settings being opened (e.g. Test CAT) may now use for CAT or PTT.
           if (footswitch_enabled_
@@ -8155,7 +8173,7 @@ QAudioDeviceInfo Configuration::impl::find_audio_device (QAudio::Mode mode, QCom
             }
         }
       // insert a place holder for the not found device
-      if(!tci_audio_) combo_box->insertItem (0, device_name + " (" + tr ("Not found", "audio device missing") + ")", QVariant::fromValue (audio_info_type {}));
+      if(!tci_for (mode)) combo_box->insertItem (0, device_name + " (" + tr ("Not found", "audio device missing") + ")", QVariant::fromValue (audio_info_type {}));
       else {
           combo_box->insertItem (0, "TCI audio", QVariant::fromValue (audio_info_type {}));
       }
@@ -8175,20 +8193,17 @@ void Configuration::impl::load_audio_devices(QAudio::Mode mode, QComboBox * comb
 
   Q_EMIT self_->enumerating_audio_devices();
 
+  // NBMODES: TCI audio replaces the device list only for the direction that uses it.
+  if (tci_for (mode)) {
+    QList<QVariant> channel_counts;
+    QList<int> scc({1});
+    copy (scc.cbegin (), scc.cend (), back_inserter (channel_counts));
+    combo_box->addItem ("TCI audio", channel_counts);
+      return;
+  }
   if (sortAlphabetically_) {
     auto const& devices = QAudioDeviceInfo::availableDevices(mode);
-    printf ("rig_active_ is: %d and tci_audio_ is %d\n", rig_active_, tci_audio_);
-    qDebug () << "qDebug says rig_active_ is: " << rig_active_ << '\n';
-    qDebug () << "qDebug says tci_audio_ is: " << tci_audio_ << '\n';
     int current_index = -1;
-    if (is_tci_ && tci_audio_) {
-      QList<QVariant> channel_counts;
-      QList<int> scc({1});
-      copy (scc.cbegin (), scc.cend (), back_inserter (channel_counts));
-      combo_box->addItem ("TCI audio", channel_counts);
-      current_index = 0;
-      return;
-    }
     // Use a vector to store device names and associated audio_info_type
     std::vector<std::pair<QString, audio_info_type>> device_items;
 

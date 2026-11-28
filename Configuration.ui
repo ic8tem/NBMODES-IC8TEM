@@ -2041,10 +2041,20 @@ transmitting periods.</string>
             <item>
              <widget class="QCheckBox" name="tci_audio_check_box">
               <property name="toolTip">
-               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Use TCI Audio when available.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Receive audio via TCI. Unchecked: receive audio comes from the selected sound card.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
               <property name="text">
-               <string>Use TCI Audio (restart required)</string>
+               <string>TCI audio RX</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="tci_tx_audio_check_box">
+              <property name="toolTip">
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Transmit audio via TCI. Unchecked: transmit audio goes to the selected sound card (virtual audio cable) and the SDR transmits from its own audio source.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              </property>
+              <property name="text">
+               <string>TCI audio TX</string>
               </property>
              </widget>
             </item>

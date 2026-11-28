@@ -651,6 +651,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
   m_tci_mod_active {false},  // TCI
   m_tci {false},  // TCI
   m_tci_audio {false},  // TCI
+  m_tci_tx_audio {false},
   m_currentMessageType {-1},
   m_lastMessageType {-1},
   m_bShMsgs {false},
@@ -1743,11 +1744,13 @@ MainWindow::MainWindow(QDir const& temp_directory,
   
   m_tci = m_config.is_tci();
   m_tci_audio = (m_config.tci_audio() && m_config.is_tci());
+  m_tci_tx_audio = (m_config.tci_tx_audio() && m_config.is_tci());
+  LOG_INFO ("Audio routing: RX " << (m_tci_audio ? "TCI" : "sound card") << ", TX " << (m_tci_tx_audio ? "TCI" : "sound card"));
 
   {
     PerformanceTrace::Phase audio_start {m_startup_trace_run, "audio.start_request"};
-    if (!m_tci_audio) {
-      startSoundcardInputStream ();
+    if (!m_tci_audio) startSoundcardInputStream ();
+    if (!m_tci_tx_audio) {
       if (!m_config.audio_output_device ().isNull ())
         {
           Q_EMIT initializeAudioOutputStream (m_config.audio_output_device ()
@@ -1789,7 +1792,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
   ui->sbSubmode->setValue (vhf || m_mode == "Q65" ? m_nSubMode : 0);
 
   if(m_mode=="MSK144") {
-    if (m_tci_audio) {
+    if (m_tci_tx_audio) {
       QTimer::singleShot (5000, this, [=] {
         if (!operatingBand ().isEmpty ()) {
           Q_EMIT m_config.transceiver_trfrequency(1000.0);
@@ -1801,7 +1804,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
       Q_EMIT transmitFrequency (1000.0);
     }
   } else {
-    if (m_tci_audio) {
+    if (m_tci_tx_audio) {
       QTimer::singleShot (5000, this, [=] {
         if (!operatingBand ().isEmpty ()) {
           Q_EMIT m_config.transceiver_trfrequency(ui->TxFreqSpinBox->value () - m_operatingFrequency.audioOffset ());
@@ -1814,7 +1817,7 @@ MainWindow::MainWindow(QDir const& temp_directory,
     }
   }
 
-  if(m_tci_audio)
+  if(m_tci_audio || m_tci_tx_audio)
   {
     QTimer::singleShot (5000, this, [=] {
       sync_tci_tx_volume (true);
@@ -3654,6 +3657,10 @@ void MainWindow::on_actionSettings_triggered()           // Setup Dialog (Settin
       }
 
     bool const next_tci_audio = m_config.tci_audio () && m_config.is_tci ();
+    bool const next_tci_tx_audio = m_config.tci_tx_audio () && m_config.is_tci ();
+    bool const transmit_sink_changed = next_tci_tx_audio != m_tci_tx_audio;
+    m_tci_tx_audio = next_tci_tx_audio;
+    LOG_INFO ("Audio routing: RX " << (next_tci_audio ? "TCI" : "sound card") << ", TX " << (next_tci_tx_audio ? "TCI" : "sound card"));
     bool const receive_source_changed = next_tci_audio != m_tci_audio;
     bool was_monitoring = m_monitoring;
     if (m_monitoring && (receive_source_changed || m_config.restart_tci ()
@@ -3672,8 +3679,9 @@ void MainWindow::on_actionSettings_triggered()           // Setup Dialog (Settin
       if(receive_source_changed || m_config.restart_audio_input ()) {
         startSoundcardInputStream ();
       }
-
-      if(m_config.restart_audio_output () && !m_config.audio_output_device ().isNull ()) {
+    }
+    if (!m_tci_tx_audio) {
+      if((transmit_sink_changed || m_config.restart_audio_output ()) && !m_config.audio_output_device ().isNull ()) {
         Q_EMIT initializeAudioOutputStream (m_config.audio_output_device ()
                                             , AudioDevice::Mono == m_config.audio_output_channel () ? 1 : 2
                                             , m_tx_audio_buffer_frames);
@@ -3681,11 +3689,20 @@ void MainWindow::on_actionSettings_triggered()           // Setup Dialog (Settin
     }
     if (!was_monitoring && receive_source_changed && !m_tci_audio)
       Q_EMIT suspendAudioInputStream ();
+    if (transmit_sink_changed && !m_transmitting) {
+      double const tx_audio_hz = m_mode == "MSK144" ? 1000.0 : ui->TxFreqSpinBox->value () - m_operatingFrequency.audioOffset ();
+      if (m_tci_tx_audio) {
+        if (!operatingBand ().isEmpty ()) Q_EMIT m_config.transceiver_trfrequency (tx_audio_hz);
+        sync_tci_tx_volume (true);
+      } else {
+        Q_EMIT transmitFrequency (tx_audio_hz);
+      }
+    }
     if (was_monitoring && (receive_source_changed || m_config.restart_tci ()
                            || !m_tci_audio)
         && !m_monitoring && !m_transmitting && g_iptt!=1) {
       if(m_mode=="MSK144") {
-        if (m_tci_audio) {
+        if (m_tci_tx_audio) {
           if (!operatingBand ().isEmpty ()) {
             Q_EMIT m_config.transceiver_trfrequency(1000.0);
           } else {
@@ -3695,7 +3712,7 @@ void MainWindow::on_actionSettings_triggered()           // Setup Dialog (Settin
           Q_EMIT transmitFrequency (1000.0);
         }
       } else {
-        if (m_tci_audio) {
+        if (m_tci_tx_audio) {
           if (!operatingBand ().isEmpty ()) {
             Q_EMIT m_config.transceiver_trfrequency(ui->TxFreqSpinBox->value () - m_operatingFrequency.audioOffset ());
           } else {
@@ -4681,7 +4698,7 @@ void MainWindow::handleRadioModeControl (bool yielded, bool ready)
   else if (ready && (m_auto || m_tune || m_jttyTxLifecycle.active ()))
     {
       setXIT (ui->TxFreqSpinBox->value ());
-      if (m_tune && m_tci_audio) m_config.transceiver_tune (true);
+      if (m_tune && m_tci_tx_audio) m_config.transceiver_tune (true);
       startTxAudioAfterPttDelay ();
     }
   if (ready) startPendingRigTune ();
@@ -9026,7 +9043,7 @@ bool MainWindow::startTx2()
   bool modulator_active;
   bool const tci_active = jtty
       ? m_jttyTxLifecycle.backend () == JttyTxLifecycle::Backend::Tci
-      : m_tci_audio;
+      : m_tci_tx_audio;
   if (tci_active) modulator_active=m_tci_mod_active;
   else modulator_active=m_modulator->isActive ();
   if (!modulator_active) { // TODO - not thread safe
@@ -9255,7 +9272,7 @@ void MainWindow::stopTx()
     && m_pendingTxStopReason != TxEvidence::TxStopReason::NormalEnd;
 #endif
   bool const tciAudio = jttyTx
-      ? jttyStop->backend == JttyTxLifecycle::Backend::Tci : m_tci_audio;
+      ? jttyStop->backend == JttyTxLifecycle::Backend::Tci : m_tci_tx_audio;
   int const stopTxDelayMs = txStopTailMs (tciAudio);
   if (jttyTx) {
     m_delayedJttyStopContext = *jttyStop;
@@ -9318,7 +9335,7 @@ void MainWindow::stopTx2()
     != JttyTxLifecycle::Backend::None;
   bool const tciAudio = delayedJtty
     ? m_delayedJttyStopContext.backend == JttyTxLifecycle::Backend::Tci
-    : m_tci_audio;
+    : m_tci_tx_audio;
   if (tciAudio) {
       Q_EMIT m_config.transceiver_ptt (false);      //Lower PTT
       monitor (true);
@@ -12474,7 +12491,7 @@ void MainWindow::setXIT(int n, Frequency base)
     synchronizeOperatingBandState (FrequencyChangeIntent::NominalRequest);
 
   //Now set the audio Tx freq
-  if (m_tci_audio) Q_EMIT m_config.transceiver_trfrequency(ui->TxFreqSpinBox->value () - m_operatingFrequency.audioOffset ());
+  if (m_tci_tx_audio) Q_EMIT m_config.transceiver_trfrequency(ui->TxFreqSpinBox->value () - m_operatingFrequency.audioOffset ());
   else Q_EMIT transmitFrequency (ui->TxFreqSpinBox->value () - m_operatingFrequency.audioOffset ());
 }
 
@@ -12759,7 +12776,7 @@ void MainWindow::dispatchTxRequest (TxEvidence::TxRequest const& request)
 {
   bool const useTciAudio = request.mode == QStringLiteral ("JTTY") && !request.tuning
     ? m_jttyTxLifecycle.backend () == JttyTxLifecycle::Backend::Tci
-    : m_tci_audio;
+    : m_tci_tx_audio;
   if (useTciAudio)
     {
       if (!request.tuning && rigTuneTimer.isActive ())
@@ -13064,7 +13081,7 @@ void MainWindow::on_outAttenuation_valueChanged (int a)
     m_pwrBandTuneMemory[curBand] = a; // remember our Tune pwr
   }
   // Updating attenuation for tuning is done in stop_tuning
-  if (m_tci_audio) {
+  if (m_tci_tx_audio) {
     sync_tci_tx_volume ();
   } else {
     Q_EMIT outAttenuationChanged (dBAttn);
@@ -13073,7 +13090,7 @@ void MainWindow::on_outAttenuation_valueChanged (int a)
 
 void MainWindow::sync_tci_tx_volume (bool force)
 {
-  if (m_tci_audio) {
+  if (m_tci_tx_audio) {
     Q_EMIT m_config.transceiver_txvolume (ui->outAttenuation->value () / 10., force);
   }
 }
@@ -13234,12 +13251,10 @@ void MainWindow::on_sbTR_valueChanged(int value)
           }
        }
     m_fastGraph->setTRPeriod (value);
-    if (!m_modeSetupActive && m_tci_audio && !operatingBand ().isEmpty ())
+    if (!m_modeSetupActive && (m_tci_audio || m_tci_tx_audio) && !operatingBand ().isEmpty ())
       Q_EMIT m_config.transceiver_period(m_TRperiod);
-    if (!m_tci_audio) {
-      m_modulator->setTRPeriod(m_TRperiod); // TODO - not thread safe
-      m_detector->setTRPeriod(m_TRperiod); // marshals to the audio thread
-    }
+    if (!m_tci_tx_audio) m_modulator->setTRPeriod(m_TRperiod); // TODO - not thread safe
+    if (!m_tci_audio) m_detector->setTRPeriod(m_TRperiod); // marshals to the audio thread
     m_wideGraph->setPeriod (value, m_nsps);
     progressBar.setMaximum (value);
   }

@@ -222,6 +222,7 @@ private:
   bool rig_power_;
   bool rig_power_off_;
   bool tci_audio_;
+  bool tci_tx_audio_;
   bool _power_;
   QWebSocket * commander_;
   QTimer * tci_timer1_;

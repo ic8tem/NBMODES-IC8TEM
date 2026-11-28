@@ -1346,7 +1346,8 @@ private:
   bool    m_sentFirst73;
   bool	  m_tci_mod_active;
   bool    m_tci;
-  bool    m_tci_audio;
+  bool    m_tci_audio;     // receive audio via TCI
+  bool    m_tci_tx_audio;  // transmit audio via TCI
   int     m_currentMessageType;
   QString m_currentMessage;
   int     m_lastMessageType;

@@ -379,10 +379,12 @@ private slots:
         QCOMPARE (ui ().rig_combo_box->currentText (), rig);
         QVERIFY2 (dialog ().is_tci_, qPrintable (rig));
         QVERIFY2 (!ui ().tci_audio_check_box->isHidden (), qPrintable (rig));
+        QVERIFY2 (!ui ().tci_tx_audio_check_box->isHidden (), qPrintable (rig));
       }
     ui ().rig_combo_box->setCurrentIndex (0);
     QVERIFY (!dialog ().is_tci_);
     QVERIFY (ui ().tci_audio_check_box->isHidden ());
+    QVERIFY (ui ().tci_tx_audio_check_box->isHidden ());
   }
 
   void baudRatePresetsRemainCanonicalAcrossTranslations ()

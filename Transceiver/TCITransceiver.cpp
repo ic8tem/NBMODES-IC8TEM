@@ -203,6 +203,7 @@ TCITransceiver::TCITransceiver (logger_type * logger, std::unique_ptr<Transceive
   , rig_power_ {(poll_interval & rig__power) == rig__power}
   , rig_power_off_ {(poll_interval & rig__power_off) == rig__power_off}
   , tci_audio_ {(poll_interval & tci__audio) == tci__audio}
+  , tci_tx_audio_ {(poll_interval & tci__txaudio) == tci__txaudio}
   , commander_ {nullptr}
   , tci_timer1_ {nullptr}
   , tci_loop1_ {nullptr}
@@ -1418,7 +1419,9 @@ void TCITransceiver::do_ptt (bool on)
       }
       else busy_PTT_ = true;
       requested_PTT_ = on;
-      if (ESDR3) {
+      // NBMODES: ",tci" asks ExpertSDR to transmit the TCI audio stream; without it the SDR uses
+      // its own TX source (e.g. a virtual audio cable fed by NBMODES' sound-card output).
+      if (ESDR3 && tci_tx_audio_) {
         const QString cmd = CmdTrx + SmDP + rx_ + SmCM + (on ? "true" : "false") + SmCM + "tci"+ SmTZ;
         sendTextMessage(cmd);
       } else {

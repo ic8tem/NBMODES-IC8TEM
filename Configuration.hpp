@@ -186,7 +186,8 @@ public:
   qint32 RxBandwidth() const;
   double degrade() const;
   double txDelay() const;
-  bool tci_audio() const;
+  bool tci_audio() const;      // receive audio via TCI
+  bool tci_tx_audio() const;   // transmit audio via TCI
   bool id_after_73 () const;
   bool tx_frequency_corrections_allowed () const;
   bool progressBar_red () const;

@@ -17,7 +17,7 @@ jobs:
   windows:
     uses: ./.github/workflows/build-windows.yml
     with:
-      version: 1.0.0-collaudo5
+      version: 1.0.0-collaudo5b
       hamlib_branch: "4.7.2"
       artifact_retention_days: 30
 
@@ -25,11 +25,11 @@ jobs:
     needs: windows
     runs-on: ubuntu-latest
     env:
-      NBM_VERSION: 1.0.0-collaudo5
+      NBM_VERSION: 1.0.0-collaudo5b
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wsjtx-1.0.0-collaudo5-windows-x86_64-installer
+          name: wsjtx-1.0.0-collaudo5b-windows-x86_64-installer
           path: out
       - name: Draft release (owner only)
         env:
@@ -38,6 +38,10 @@ jobs:
           ls -la out
           cat > notes.md <<'NOTE'
           Versione di collaudo, solo per IC8TEM. Base WSJT-X 3.3.0-beta8 (K1JT e WSJT Development Group, GPLv3).
+
+          Collaudo5b: audio TCI misto come MSHV. Due caselle separate, "TCI audio RX" e "TCI audio TX", senza riavvio:
+          RX dal TCI e TX dalla scheda audio (o cavo audio virtuale), o viceversa, o entrambi TCI, o entrambi scheda audio.
+          Con ExpertSDR il PTT chiede la sorgente TCI solo se il TX passa dal TCI. L'instradamento scelto e' scritto nel log verboso.
 
           Collaudo5: correzione TCI. TCI-client1/2 di nuovo riconosciute come radio TCI: casella "Use TCI Audio" visibile,
           audio e PTT via TCI. Se il PTT non puo' partire (programma SDR non avviato o non pronto) ora compare un messaggio.
