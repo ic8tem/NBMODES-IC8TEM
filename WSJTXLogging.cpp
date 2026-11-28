@@ -17,6 +17,7 @@
 #ifdef Q_OS_WIN
 #include <boost/log/sinks/text_file_backend.hpp>
 #include <boost/log/sinks/async_frontend.hpp>
+#include <boost/log/sinks/sync_frontend.hpp>
 #include <boost/log/expressions.hpp>
 #include <boost/log/expressions/formatters/date_time.hpp>
 #include <boost/log/expressions/predicates/channel_severity_filter.hpp>
@@ -180,8 +181,44 @@ namespace
 
     core->add_sink (sys_sink);
 
+#ifdef NBM_VERBOSE_LOG
+    // NBMODES-IC8TEM (collaudo): log verboso di tutto (tutti i canali, da
+    // trace in su) in NBMODES-verbose.log, scritto subito su disco per non
+    // perdere nulla in caso di blocco. 10 MB per file, ultimi 10 file.
+    auto nbm_sink = boost::make_shared<sinks::synchronous_sink<sinks::text_file_backend>>
+      (
+       keywords::file_name = app_data.absoluteFilePath ("NBMODES-verbose.log").toStdWString ()
+#if BOOST_VERSION / 100 >= 1070
+       , keywords::target_file_name = app_data.absoluteFilePath ("verbose-logs/NBMODES-verbose_%Y%m%d_%H%M%S_%N.log").toStdWString ()
+#endif
+       , keywords::rotation_size = 10 * 1024 * 1024
+       , keywords::auto_flush = true
+       , keywords::open_mode = std::ios_base::out | std::ios_base::app
+       );
+    nbm_sink->locked_backend ()->set_file_collector
+      (
+       sinks::file::make_collector
+       (
+        keywords::max_files = 10
+        , keywords::target = app_data.absoluteFilePath ("verbose-logs").toStdWString ()
+        )
+       );
+    nbm_sink->locked_backend ()->scan_for_files ();
+    nbm_sink->set_formatter
+      (
+       expr::stream
+       << "[" << channel
+       << "][" << expr::format_date_time<posix_time::ptime> ("TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
+       << "][" << trivial::severity
+       << "] " << expr::message
+       );
+    // Hamlib "trace" polling is extremely chatty: keep its debug and above.
+    nbm_sink->set_filter (!(channel == "RIGCTRL" && severity < trivial::debug));
+    core->add_sink (nbm_sink);
+#endif
+
     // Indicate start of logging
-    LOG_INFO ("Log Start");
+    LOG_INFO ("Log Start - NBMODES-IC8TEM " NBM_VERSION_STR " (WSJT-X 3.3.0-beta8 base)");
   }
 #else
   void default_log_config (QDir const& app_data)
@@ -219,8 +256,28 @@ namespace
       (%Channel% = "DECODER" & %Severity% >= warning) | %Severity% >= fatal)");
     sink_setting ("Format", R"([%Channel%][%TimeStamp(format="%Y-%m-%d %H:%M:%S.%f")%])"
       R"([%Uptime(format="%O:%M:%S.%f")%][%Severity%] %Message%)");
+#ifdef NBM_VERBOSE_LOG
+    // NBMODES-IC8TEM (collaudo): log verboso di tutto in NBMODES-verbose.log.
+    auto verbose_setting = [&settings] (char const * name, QString const& value) {
+      settings["Sinks"]["NBMVERBOSE"][name] = log_string (value);
+    };
+    verbose_setting ("Destination", "TextFile");
+    verbose_setting ("Asynchronous", "false");
+    verbose_setting ("AutoFlush", "true");
+    verbose_setting ("FileName", app_data.absoluteFilePath ("NBMODES-verbose.log"));
+#if BOOST_VERSION / 100 >= 1070
+    verbose_setting ("TargetFileName", app_data.absoluteFilePath ("verbose-logs/NBMODES-verbose_%Y%m%d_%H%M%S_%N.log"));
+#endif
+    verbose_setting ("RotationSize", "10485760");
+    verbose_setting ("Append", "true");
+    verbose_setting ("Target", app_data.absoluteFilePath ("verbose-logs"));
+    verbose_setting ("MaxFiles", "10");
+    verbose_setting ("Filter", R"(%Channel% != "RIGCTRL" | %Severity% >= debug)");
+    verbose_setting ("ScanForFiles", "Matching");
+    verbose_setting ("Format", R"([%Channel%][%TimeStamp(format="%Y-%m-%d %H:%M:%S.%f")%][%Severity%] %Message%)");
+#endif
     logging::init_from_settings (settings);
-    LOG_INFO ("Log Start");
+    LOG_INFO ("Log Start - NBMODES-IC8TEM " NBM_VERSION_STR " (WSJT-X 3.3.0-beta8 base)");
   }
 #endif
 }

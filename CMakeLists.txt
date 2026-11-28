@@ -92,6 +92,11 @@ project (wsjtx
 
 # NBMODES-IC8TEM: versione propria del programma (la base WSJT-X resta in PROJECT_VERSION)
 set (NBM_VERSION 1.0.0)
+# NBMODES-IC8TEM: log verboso NBMODES-verbose.log (acceso nelle versioni di collaudo).
+option (NBM_VERBOSE_LOG "Write the verbose NBMODES-verbose.log (test builds)" ON)
+if (NBM_VERBOSE_LOG)
+  add_compile_definitions (NBM_VERBOSE_LOG)
+endif ()
 add_compile_definitions (NBM_VERSION_STR="${NBM_VERSION}")
 
 # NBMODES-IC8TEM: nomi degli eseguibili lanciati dal programma (vedi in fondo OUTPUT_NAME)

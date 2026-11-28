@@ -696,7 +696,7 @@ void TCITransceiver::onMessageReceived(const QString &str)
     if (cmd.isEmpty ()) continue;
     QStringList args = cmd.last().split(",", SkipEmptyParts);
     Tci_Cmd idCmd = mapCmd_[cmd.first()];
-    if (idCmd != Cmd_Power && idCmd != Cmd_SWR && idCmd != Cmd_Smeter && idCmd != Cmd_AppFocus && idCmd != Cmd_RxSensors && idCmd != Cmd_TxSensors) { printf("%s TCI message received:|%s| ",QDateTime::QDateTime::currentDateTimeUtc().toString("hh:mm:ss.zzz").toStdString().c_str(),str.toStdString().c_str()); printf("idCmd : %d args : %s\n",idCmd,args.join("|").toStdString().c_str());}
+    if (idCmd != Cmd_Power && idCmd != Cmd_SWR && idCmd != Cmd_Smeter && idCmd != Cmd_AppFocus && idCmd != Cmd_RxSensors && idCmd != Cmd_TxSensors) { CAT_DEBUG ("TCI received: " + cmds); printf("%s TCI message received:|%s| ",QDateTime::QDateTime::currentDateTimeUtc().toString("hh:mm:ss.zzz").toStdString().c_str(),str.toStdString().c_str()); printf("idCmd : %d args : %s\n",idCmd,args.join("|").toStdString().c_str());}
     qDebug() << cmds << idCmd;
     if (idCmd <=0) continue;
 
@@ -950,7 +950,9 @@ void TCITransceiver::sendTextMessage(const QString &message)
 {
   if (inConnected) {
     commander_->sendTextMessage(message);
-    CAT_TRACE ("TCI Command Sent: " + message + '\n');
+    CAT_DEBUG ("TCI sent: " + message);
+  } else {
+    CAT_DEBUG ("TCI command NOT sent (not connected): " + message);
   }
 }
 
@@ -1398,8 +1400,22 @@ void TCITransceiver::do_ptt (bool on)
   TRACE_CAT ("TCITransceiver", on << state ());
   if (use_for_ptt_) {
     if (on != PTT_) {
+      CAT_DEBUG ("TCI PTT request " << (on ? "ON" : "OFF") << " rx=" << rx_.toStdString ()
+                 << " connected=" << inConnected << " ready=" << tci_Ready
+                 << " power=" << _power_ << " busy=" << busy_PTT_ << " ESDR3=" << ESDR3
+                 << " tci_audio=" << tci_audio_);
       if (!inConnected && !error_.isEmpty()) throw error {error_};
-      else if (busy_PTT_ || !tci_Ready || !_power_) return;
+      else if (busy_PTT_ || !tci_Ready || !_power_) {
+        // NBMODES-IC8TEM: prima questo ritorno era silenzioso; ora resta nel log verboso.
+        CAT_DEBUG ("TCI PTT ignored: " << (busy_PTT_ ? "previous PTT command still running " : "")
+                   << (!tci_Ready ? "TCI not ready " : "") << (!_power_ ? "SDR not started (power off) " : ""));
+        // NBMODES-IC8TEM: a TX request that cannot be honoured is shown to the user.
+        if (on && !busy_PTT_) {
+          throw error {!_power_ ? tr ("TCI: the SDR program is not started (press Start/Power in ExpertSDR/Thetis)")
+                                : tr ("TCI: the SDR program is not ready yet")};
+        }
+        return;
+      }
       else busy_PTT_ = true;
       requested_PTT_ = on;
       if (ESDR3) {
@@ -1431,6 +1447,7 @@ void TCITransceiver::do_ptt (bool on)
   }
   else
   {
+    CAT_DEBUG ("TCI PTT request but PTT method is not CAT");
     TRACE_CAT ("TCITransceiver", "TCI should use PTT via CAT");
     throw error {tr ("TCI should use PTT via CAT")};
   }

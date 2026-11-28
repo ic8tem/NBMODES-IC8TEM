@@ -658,6 +658,12 @@ public:
 
 
 // Internal implementation of the Configuration class.
+// NBMODES-IC8TEM: TCI rigs are "TCI-client1/2" (old names "TCI Client RX1/2").
+static bool nbm_is_tci_rig (QString const& name)
+{
+  return name.startsWith ("TCI-client", Qt::CaseInsensitive) || name.startsWith ("TCI Client", Qt::CaseInsensitive);
+}
+
 class Configuration::impl final
   : public QDialog
 {
@@ -3934,11 +3940,11 @@ void Configuration::impl::read_settings ()
   specOp_in_comments_ = settings_->value("specOptoComments", false).toBool ();
   rig_params_.rig_name = settings_->value ("Rig", TransceiverFactory::basic_transceiver_name_).toString ();
   rig_is_dummy_ = TransceiverFactory::basic_transceiver_name_ == rig_params_.rig_name;
-  is_tci_ = rig_params_.rig_name.startsWith("TCI Cli");
   rig_params_.tci_port = settings_->value ("CATTCIPort","").toString ();
   // NBMODES-IC8TEM: nomi nuovi delle radio TCI e un indirizzo per ciascuna
   if (rig_params_.rig_name == "TCI Client RX1") rig_params_.rig_name = "TCI-client1";
   if (rig_params_.rig_name == "TCI Client RX2") rig_params_.rig_name = "TCI-client2";
+  is_tci_ = nbm_is_tci_rig (rig_params_.rig_name);
   tci_ports_[0] = settings_->value ("CATTCIPort1", rig_params_.tci_port).toString ();
   tci_ports_[1] = settings_->value ("CATTCIPort2", rig_params_.tci_port).toString ();
   if (rig_params_.rig_name.startsWith ("TCI-client")) rig_params_.tci_port = tci_ports_[tci_client_index (rig_params_.rig_name)];
@@ -4471,7 +4477,7 @@ void Configuration::impl::set_rig_invariants ()
 
   auto CAT_PTT_enabled = transceiver_factory_.has_CAT_PTT (rig);
   auto asynchronous_CAT = transceiver_factory_.has_asynchronous_CAT (rig);
-  is_tci_ = ui_->rig_combo_box->currentText().startsWith("TCI Cli");
+  is_tci_ = nbm_is_tci_rig (ui_->rig_combo_box->currentText());
   ui_->tci_audio_check_box->setVisible(is_tci_);
   ui_->TCI_spin_box->setVisible(is_tci_);
 //  ui_->refresh_push_button->setVisible(is_tci_);
@@ -4891,7 +4897,7 @@ void Configuration::impl::accept ()
   rig_params_ = temp_rig_params; // now we can go live with the rig
                                  // related configuration parameters
   rig_is_dummy_ = TransceiverFactory::basic_transceiver_name_ == rig_params_.rig_name;
-  is_tci_ = rig_params_.rig_name.startsWith("TCI Cli");
+  is_tci_ = nbm_is_tci_rig (rig_params_.rig_name);
   // Check to see whether SoundInThread must be restarted,
   // and save user parameters.
   {

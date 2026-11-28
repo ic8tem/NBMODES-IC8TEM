@@ -13122,7 +13122,7 @@ void MainWindow::pskSetLocal (QString const& rx_band)
   if (rig_information == "DX Lab Suite Commander") rig_information = "N/A (DXLab)";
   if (rig_information.contains("OmniRig")) rig_information = "N/A (OmniRig)";
   if (rig_information == "FLRig") rig_information = "N/A (FLRig)";
-  if (rig_information.contains("TCI Cli")) rig_information = "N/A (TCI)";
+  if (rig_information.startsWith("TCI-client", Qt::CaseInsensitive) || rig_information.contains("TCI Cli")) rig_information = "N/A (TCI)";
   m_psk_Reporter.setLocalStation(m_config.my_callsign (), m_config.my_grid (), antenna_description, rig_information);
 }
 

@@ -369,6 +369,22 @@ private slots:
     settings_.reset ();
   }
 
+  // NBMODES-IC8TEM: the "Use TCI Audio" box must appear for TCI-client1/2
+  // (it was hidden after the rename from "TCI Client RX1/2").
+  void tciAudioCheckBoxVisibleForTciClients ()
+  {
+    for (auto const& rig : {QString {"TCI-client1"}, QString {"TCI-client2"}})
+      {
+        ui ().rig_combo_box->setCurrentText (rig);
+        QCOMPARE (ui ().rig_combo_box->currentText (), rig);
+        QVERIFY2 (dialog ().is_tci_, qPrintable (rig));
+        QVERIFY2 (!ui ().tci_audio_check_box->isHidden (), qPrintable (rig));
+      }
+    ui ().rig_combo_box->setCurrentIndex (0);
+    QVERIFY (!dialog ().is_tci_);
+    QVERIFY (ui ().tci_audio_check_box->isHidden ());
+  }
+
   void baudRatePresetsRemainCanonicalAcrossTranslations ()
   {
     class Translator final : public QTranslator
